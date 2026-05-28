@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import folium
 from folium.plugins import HeatMap
-from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 import requests
 
 # --- 1. CONFIGURACIÓN Y SEGURIDAD ---
@@ -52,7 +52,6 @@ def cargar_cafeterias():
 def obtener_trafico(ciudad):
     ciudad_query = "Ciudad Autónoma de Buenos Aires" if ciudad == "Buenos Aires" else ciudad
     
-    # Ampliamos la búsqueda para incluir shops, restaurantes, hoteles y bares (nwr = nodes, ways, relations)
     query = f"""
     [out:json][timeout:120];
     area["name"="{ciudad_query}"]->.searchArea;
@@ -65,7 +64,7 @@ def obtener_trafico(ciudad):
     out center;
     """
     url = "http://overpass-api.de/api/interpreter"
-    headers = {'User-Agent': 'ConsultoraCafeB2B/2.0'}
+    headers = {'User-Agent': 'ConsultoraCafeB2B/2.1'}
     
     traducciones = {
         'hospital': 'Hospital', 'university': 'Universidad', 'bank': 'Banco',
@@ -81,14 +80,11 @@ def obtener_trafico(ciudad):
         data = res.json()
         puntos = []
         for e in data.get('elements', []):
-            # Overpass devuelve 'center' para polígonos (como edificios o shoppings) y 'lat'/'lon' para nodos
             lat = e.get('lat') or e.get('center', {}).get('lat')
             lon = e.get('lon') or e.get('center', {}).get('lon')
             
             if lat and lon:
                 tags = e.get('tags', {})
-                
-                # Identificar qué es
                 if 'shop' in tags:
                     tipo_raw = 'shop'
                     tipo_es = f"Local Comercial ({tags['shop'].capitalize()})"
@@ -101,13 +97,9 @@ def obtener_trafico(ciudad):
                 
                 nombre = tags.get('name', 'Sin nombre registrado')
                 
-                # Ponderación del peso
-                if tipo_raw in ['hospital', 'university', 'mall']:
-                    peso = 3.0
-                elif tipo_raw in ['bank', 'school', 'hotel', 'restaurant', 'bar']:
-                    peso = 2.0
-                else:
-                    peso = 1.0 # Shops individuales, paradas, etc.
+                if tipo_raw in ['hospital', 'university', 'mall']: peso = 3.0
+                elif tipo_raw in ['bank', 'school', 'hotel', 'restaurant', 'bar']: peso = 2.0
+                else: peso = 1.0 
                 
                 puntos.append({
                     'lat': lat, 'lon': lon, 'peso': peso,
@@ -121,7 +113,7 @@ def obtener_trafico(ciudad):
 with st.spinner("Conectando con base de datos privada..."):
     df_cafes = cargar_cafeterias()
 
-# --- 4. PANEL LATERAL: FILTROS Y PEA ---
+# --- 4. PANEL LATERAL ---
 st.sidebar.subheader("📍 Filtro de Zona")
 ciudades_disponibles = ["Seleccionar Ciudad..."] + list(GIDS.keys())
 ciudad_seleccionada = st.sidebar.selectbox("Ciudad a analizar", options=ciudades_disponibles)
@@ -137,7 +129,7 @@ clientes_diarios = int(pea_total * (captacion / 100))
 
 st.sidebar.info(f"☕ **Demanda Estimada:** {clientes_diarios} clientes/día")
 
-# --- 5. RENDERIZADO DEL MAPA ---
+# --- 5. RENDERIZADO LIGERO DEL MAPA ---
 if ciudad_seleccionada != "Seleccionar Ciudad...":
     col1, col2 = st.columns([3, 1])
     
@@ -146,15 +138,15 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
         df_cafes_ciudad = df_cafes[df_cafes['ciudad'] == ciudad_seleccionada]
         st.metric("Cafeterías (Competencia)", len(df_cafes_ciudad))
         
-        with st.spinner("Descargando mapa comercial (puede tardar por volumen de datos)..."):
+        with st.spinner("Descargando mapa comercial..."):
             df_trafico_ciudad = obtener_trafico(ciudad_seleccionada)
             
-        st.metric("Puntos de Interés/Comercios", len(df_trafico_ciudad))
+        st.metric("Puntos de Interés Total", len(df_trafico_ciudad))
         
         st.markdown("### Guía de Capas")
         st.markdown("🔴 **Calor Oferta:** Polos saturados.")
-        st.markdown("🔵 **Calor Demanda:** Comercios, gastronomía, bancos y hospitales.")
-        st.markdown("📍 **Detalle de Nodos:** Prender desde el menú del mapa para ver los nombres de los locales y lugares.")
+        st.markdown("🔵 **Calor Demanda:** Comercios, gastronomía, instituciones.")
+        st.markdown("📍 **Detalle Anclas:** Muestra solo hospitales, universidades, shoppings y bancos para no saturar el mapa.")
 
     with col1:
         centro_lat = df_cafes_ciudad['lat'].mean() if not df_cafes_ciudad.empty else -38.0
@@ -163,6 +155,7 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
         mapa = folium.Map(location=[centro_lat, centro_lon], zoom_start=14, tiles="CartoDB dark_matter")
         
         if not df_trafico_ciudad.empty:
+            # 1. Capa de Calor usa TODOS los puntos (los 2300+)
             capa_calor_trafico = folium.FeatureGroup(name="🚶‍♂️ Densidad Comercial/Peatonal")
             HeatMap(
                 df_trafico_ciudad[['lat', 'lon', 'peso']].values.tolist(),
@@ -171,8 +164,11 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
             ).add_to(capa_calor_trafico)
             capa_calor_trafico.add_to(mapa)
             
-            capa_nodos = folium.FeatureGroup(name="📍 Detalle de Locales/Instituciones", show=False)
-            for _, row in df_trafico_ciudad.iterrows():
+            # 2. Capa de Nodos SOLO usa los de peso >= 2.0 (Anclas principales) para no crashear la tablet
+            df_nodos_importantes = df_trafico_ciudad[df_trafico_ciudad['peso'] >= 2.0]
+            capa_nodos = folium.FeatureGroup(name="📍 Detalle Anclas Principales", show=False)
+            
+            for _, row in df_nodos_importantes.iterrows():
                 tooltip_text = f"<b>{row['tipo_es']}</b><br>{row['nombre']}"
                 folium.CircleMarker(
                     location=[row['lat'], row['lon']],
@@ -185,6 +181,7 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
             capa_nodos.add_to(mapa)
             
         if not df_cafes_ciudad.empty:
+            # 3. Capa de Calor de Cafeterías
             capa_cafes = folium.FeatureGroup(name="☕ Cafeterías (Competencia)")
             HeatMap(
                 df_cafes_ciudad[['lat', 'lon']].values.tolist(),
@@ -195,7 +192,8 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
             
         folium.LayerControl(collapsed=False).add_to(mapa)
         
-        st_folium(mapa, width=800, height=600, returned_objects=[])
+        # 4. Renderizado HTML ultraligero (reemplaza a st_folium)
+        components.html(mapa._repr_html_(), height=600)
 
 else:
     st.info("👈 Seleccioná una ciudad en el menú lateral para iniciar el análisis.")
