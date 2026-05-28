@@ -33,7 +33,6 @@ def cargar_cafeterias():
             df = pd.read_csv(url)
             df.columns = [str(c).upper().strip() for c in df.columns]
             
-            # Buscamos columnas de coordenadas y nombre
             lat_col = next((col for col in df.columns if col in ['LAT', 'LATITUD']), None)
             lon_col = next((col for col in df.columns if col in ['LONG', 'LONGITUD', 'LNG']), None)
             nombre_col = next((col for col in df.columns if col in ['CAFE', 'NOMBRE', 'LOCAL']), None)
@@ -57,11 +56,12 @@ def cargar_cafeterias():
             pass
     return pd.DataFrame(locales)
 
-# --- 3. FUENTE DE DATOS 2: TRÁFICO COMERCIAL Y PEATONAL DETALLADO ---
+# --- 3. FUENTE DE DATOS 2: TRÁFICO Y MEDIOS DE TRANSPORTE ---
 @st.cache_data(ttl=86400)
 def obtener_trafico(ciudad):
     ciudad_query = "Ciudad Autónoma de Buenos Aires" if ciudad == "Buenos Aires" else ciudad
     
+    # Agregamos railway y public_transport para trenes, subtes y terminales
     query = f"""
     [out:json][timeout:120];
     area["name"="{ciudad_query}"]->.searchArea;
@@ -69,18 +69,21 @@ def obtener_trafico(ciudad):
       nwr["amenity"~"bank|hospital|clinic|school|university|restaurant|bar|fast_food|marketplace"](area.searchArea);
       nwr["shop"](area.searchArea);
       nwr["tourism"~"hotel|museum|attraction"](area.searchArea);
+      nwr["railway"~"station|subway_entrance"](area.searchArea);
+      nwr["public_transport"="station"](area.searchArea);
       node["highway"="bus_stop"](area.searchArea);
     );
     out center;
     """
     url = "http://overpass-api.de/api/interpreter"
-    headers = {'User-Agent': 'ConsultoraCafeB2B/2.1'}
+    headers = {'User-Agent': 'ConsultoraCafeB2B/2.2'}
     
     traducciones = {
         'hospital': 'Hospital', 'university': 'Universidad', 'bank': 'Banco',
         'clinic': 'Clínica', 'school': 'Escuela', 'bus_stop': 'Parada de Colectivo',
         'restaurant': 'Restaurante', 'bar': 'Bar/Cervecería', 'fast_food': 'Comida Rápida',
-        'hotel': 'Hotel', 'marketplace': 'Mercado/Feria'
+        'hotel': 'Hotel', 'marketplace': 'Mercado/Feria', 
+        'station': 'Estación (Tren/Subte)', 'subway_entrance': 'Boca de Subte'
     }
     
     try:
@@ -98,6 +101,12 @@ def obtener_trafico(ciudad):
                 if 'shop' in tags:
                     tipo_raw = 'shop'
                     tipo_es = f"Local Comercial ({tags['shop'].capitalize()})"
+                elif 'railway' in tags:
+                    tipo_raw = tags['railway']
+                    tipo_es = traducciones.get(tipo_raw, 'Estación Ferroviaria')
+                elif 'public_transport' in tags:
+                    tipo_raw = 'station'
+                    tipo_es = 'Estación de Transporte'
                 elif 'tourism' in tags:
                     tipo_raw = tags['tourism']
                     tipo_es = traducciones.get(tipo_raw, tipo_raw.capitalize())
@@ -107,7 +116,8 @@ def obtener_trafico(ciudad):
                 
                 nombre = tags.get('name', 'Sin nombre registrado')
                 
-                if tipo_raw in ['hospital', 'university', 'mall']: peso = 3.0
+                # Subtes, trenes y hospitales tienen peso máximo
+                if tipo_raw in ['hospital', 'university', 'mall', 'station', 'subway_entrance']: peso = 3.0
                 elif tipo_raw in ['bank', 'school', 'hotel', 'restaurant', 'bar']: peso = 2.0
                 else: peso = 1.0 
                 
@@ -138,9 +148,8 @@ clientes_diarios = int(pea_total * (captacion / 100))
 
 st.sidebar.info(f"☕ **Demanda Estimada:** {clientes_diarios} clientes/día")
 
-# --- 5. RENDERIZADO LIGERO DEL MAPA ---
+# --- 5. RENDERIZADO OPTIMIZADO PARA TABLETS ---
 if ciudad_seleccionada != "Seleccionar Ciudad...":
-    # Ampliamos la proporción del mapa para que ocupe más ancho en la tablet (4:1 en vez de 3:1)
     col1, col2 = st.columns([4, 1])
     
     with col2:
@@ -155,26 +164,38 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
         
         st.markdown("### Guía de Capas")
         st.markdown("🔴 **Oferta:** Polos saturados.")
-        st.markdown("🔵 **Demanda:** Comercios, instituciones.")
-        st.markdown("📍 **Anclas:** Hospitales, shoppings y bancos.")
+        st.markdown("🔵 **Demanda:** Subtes, trenes, comercios, instituciones.")
+        st.markdown("📍 **Anclas:** Detalles de los puntos fuertes.")
         st.markdown("🏷️ **Nombres:** Prendelo para ver qué café es cada uno.")
 
     with col1:
-        centro_lat = df_cafes_ciudad['lat'].mean() if not df_cafes_ciudad.empty else -38.0
-        centro_lon = df_cafes_ciudad['lon'].mean() if not df_cafes_ciudad.empty else -57.5
+        centro_lat = df_cafes_ciudad['lat'].mean() if not df_cafes_ciudad.empty else -34.6
+        centro_lon = df_cafes_ciudad['lon'].mean() if not df_cafes_ciudad.empty else -58.4
         
-        mapa = folium.Map(location=[centro_lat, centro_lon], zoom_start=14, tiles="CartoDB dark_matter")
+        mapa = folium.Map(location=[centro_lat, centro_lon], zoom_start=13, tiles="CartoDB dark_matter")
         
         if not df_trafico_ciudad.empty:
+            # 1. OPTIMIZACIÓN: Si hay más de 8000 puntos (Ej: CABA), tomamos una muestra representativa para que la tablet no colapse
+            df_calor_trafico = df_trafico_ciudad
+            if len(df_calor_trafico) > 8000:
+                df_calor_trafico = df_calor_trafico.sample(n=8000, random_state=42)
+
             capa_calor_trafico = folium.FeatureGroup(name="🚶‍♂️ Densidad Comercial/Peatonal")
             HeatMap(
-                df_trafico_ciudad[['lat', 'lon', 'peso']].values.tolist(),
+                df_calor_trafico[['lat', 'lon', 'peso']].values.tolist(),
                 radius=15, blur=15, min_opacity=0.4,
                 gradient={0.4: 'navy', 0.6: 'blue', 1: 'cyan'} 
             ).add_to(capa_calor_trafico)
             capa_calor_trafico.add_to(mapa)
             
+            # 2. OPTIMIZACIÓN NODOS: Mostramos solo los más importantes y ponemos un tope de 1000 para que ande fluido
             df_nodos_importantes = df_trafico_ciudad[df_trafico_ciudad['peso'] >= 2.0]
+            if len(df_nodos_importantes) > 1000:
+                # Si sigue habiendo muchos, filtramos solo nivel 3 (Subtes, trenes, hospitales)
+                df_nodos_importantes = df_nodos_importantes[df_nodos_importantes['peso'] >= 3.0]
+                if len(df_nodos_importantes) > 1000:
+                    df_nodos_importantes = df_nodos_importantes.sample(n=1000, random_state=42)
+
             capa_nodos = folium.FeatureGroup(name="📍 Detalle Anclas Principales", show=False)
             
             for _, row in df_nodos_importantes.iterrows():
@@ -198,7 +219,6 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
             ).add_to(capa_cafes)
             capa_cafes.add_to(mapa)
 
-            # NUEVA CAPA: Nombres de las cafeterías (Apagada por defecto)
             capa_nombres_cafes = folium.FeatureGroup(name="🏷️ Nombres de Cafeterías", show=False)
             for _, row in df_cafes_ciudad.iterrows():
                 folium.CircleMarker(
@@ -213,7 +233,6 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
             
         folium.LayerControl(collapsed=False).add_to(mapa)
         
-        # Aumentamos la altura de 600 a 750 para que sea mucho más inmersivo
         components.html(mapa._repr_html_(), height=750)
 
 else:
