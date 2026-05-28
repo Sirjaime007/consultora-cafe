@@ -14,8 +14,8 @@ if password != "AdminCafe2026":
     st.warning("✋ Ingresá la contraseña para acceder al panel de inteligencia.")
     st.stop()
 
-st.title("🔥 Inteligencia B2B: Oferta vs Demanda vs Costos")
-st.markdown("Cruce de competencia, tráfico peatonal, demografía y viabilidad inmobiliaria.")
+st.title("🔥 Inteligencia B2B: Oferta vs Demanda")
+st.markdown("Cruce de competencia contra tráfico peatonal e instituciones clave.")
 
 # --- 2. FUENTE DE DATOS 1: CAFETERÍAS ---
 SHEET_ID = "10vUOhRr7IAXlRrkBphxEP4ApXYBgrnuxJq6G83GnfHI"
@@ -47,7 +47,7 @@ def cargar_cafeterias():
             pass
     return pd.DataFrame(locales)
 
-# --- 3. FUENTE DE DATOS 2: TRÁFICO PEATONAL ---
+# --- 3. FUENTE DE DATOS 2: TRÁFICO PEATONAL DETALLADO ---
 @st.cache_data(ttl=86400)
 def obtener_trafico(ciudad):
     ciudad_query = "Ciudad Autónoma de Buenos Aires" if ciudad == "Buenos Aires" else ciudad
@@ -61,7 +61,12 @@ def obtener_trafico(ciudad):
     out center;
     """
     url = "http://overpass-api.de/api/interpreter"
-    headers = {'User-Agent': 'ConsultoraCafeB2B/1.0'}
+    headers = {'User-Agent': 'ConsultoraCafeB2B/1.1'}
+    
+    traducciones = {
+        'hospital': 'Hospital', 'university': 'Universidad', 'bank': 'Banco',
+        'clinic': 'Clínica', 'school': 'Escuela', 'bus_stop': 'Parada de Colectivo'
+    }
     
     try:
         res = requests.post(url, data={'data': query}, headers=headers, timeout=100)
@@ -71,9 +76,19 @@ def obtener_trafico(ciudad):
         puntos = []
         for e in data.get('elements', []):
             if 'lat' in e and 'lon' in e:
-                tipo = e.get('tags', {}).get('amenity', 'bus_stop')
-                peso = 3.0 if tipo in ['hospital', 'university'] else 2.0 if tipo in ['bank', 'clinic', 'school'] else 1.0
-                puntos.append({'lat': e['lat'], 'lon': e['lon'], 'peso': peso})
+                tags = e.get('tags', {})
+                tipo_raw = tags.get('amenity', 'bus_stop')
+                tipo_es = traducciones.get(tipo_raw, tipo_raw.capitalize())
+                
+                # Intentamos sacar el nombre exacto de la institución, si no tiene, usamos el tipo
+                nombre = tags.get('name', 'Sin nombre registrado')
+                
+                peso = 3.0 if tipo_raw in ['hospital', 'university'] else 2.0 if tipo_raw in ['bank', 'clinic', 'school'] else 1.0
+                
+                puntos.append({
+                    'lat': e['lat'], 'lon': e['lon'], 'peso': peso,
+                    'tipo_es': tipo_es, 'nombre': nombre
+                })
         return pd.DataFrame(puntos)
     except:
         return pd.DataFrame()
@@ -81,41 +96,21 @@ def obtener_trafico(ciudad):
 with st.spinner("Conectando con base de datos privada..."):
     df_cafes = cargar_cafeterias()
 
-# --- 4. PANEL LATERAL: FILTROS, PEA E INMOBILIARIA ---
-st.sidebar.subheader("📍 1. Filtro de Zona")
+# --- 4. PANEL LATERAL: FILTROS Y PEA ---
+st.sidebar.subheader("📍 Filtro de Zona")
 ciudades_disponibles = ["Seleccionar Ciudad..."] + list(GIDS.keys())
 ciudad_seleccionada = st.sidebar.selectbox("Ciudad a analizar", options=ciudades_disponibles)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🧮 2. Demanda (PEA)")
+st.sidebar.subheader("🧮 Demanda (PEA)")
 poblacion = st.sidebar.number_input("Población de la zona", value=15000, step=1000)
 tasa_pea = st.sidebar.slider("% Población Activa (PEA)", 30, 60, 47)
 captacion = st.sidebar.slider("% Captación de clientes", 1, 30, 10)
 
 pea_total = int(poblacion * (tasa_pea / 100))
 clientes_diarios = int(pea_total * (captacion / 100))
-clientes_mensuales = clientes_diarios * 30
 
 st.sidebar.info(f"☕ **Demanda Estimada:** {clientes_diarios} clientes/día")
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("🏠 3. Filtro Inmobiliario (Realidad)")
-alquiler_mensual = st.sidebar.number_input("Alquiler Mensual Estimado ($ARS)", value=1000000, step=100000)
-superficie_m2 = st.sidebar.number_input("Superficie del local (m²)", value=50, step=10)
-
-# Cálculos Inmobiliarios
-costo_m2 = alquiler_mensual / superficie_m2 if superficie_m2 > 0 else 0
-# ¿Cuánto del alquiler se paga por cada cliente potencial al mes?
-costo_alquiler_por_cliente = alquiler_mensual / clientes_mensuales if clientes_mensuales > 0 else 0
-
-st.sidebar.write(f"**Costo por m²:** ${costo_m2:,.0f} ARS")
-
-if costo_alquiler_por_cliente > 1500:
-    st.sidebar.error(f"⚠️ **Riesgo Alto:** Estás pagando ${costo_alquiler_por_cliente:,.0f} de alquiler por cada cliente potencial. El margen de ganancia por taza no lo soporta.")
-elif costo_alquiler_por_cliente > 800:
-    st.sidebar.warning(f"⚖️ **Riesgo Medio:** ${costo_alquiler_por_cliente:,.0f} de costo de alquiler por cliente. Vas a depender mucho de la venta cruzada (pastelería).")
-else:
-    st.sidebar.success(f"✅ **Viable:** Costo de alquiler sano (${costo_alquiler_por_cliente:,.0f} por cliente). Buen balance entre tráfico y costo fijo.")
 
 # --- 5. RENDERIZADO DEL MAPA ---
 if ciudad_seleccionada != "Seleccionar Ciudad...":
@@ -126,14 +121,14 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
         df_cafes_ciudad = df_cafes[df_cafes['ciudad'] == ciudad_seleccionada]
         st.metric("Cafeterías (Competencia)", len(df_cafes_ciudad))
         
-        with st.spinner("Descargando tráfico peatonal..."):
+        with st.spinner("Descargando tráfico peatonal detallado..."):
             df_trafico_ciudad = obtener_trafico(ciudad_seleccionada)
         st.metric("Nodos de Tráfico", len(df_trafico_ciudad))
         
-        st.markdown("### Guía de Consultoría")
-        st.markdown("🔴 **Rojo/Naranja (Oferta):** Polos gastronómicos saturados.")
-        st.markdown("🔵 **Azul/Celeste (Demanda):** Zonas de alto tránsito (Hospitales, Bancos, Escuelas).")
-        st.markdown("💡 **Tip:** Buscá las zonas azules sin rojo cerca y validá el precio del m² en el panel lateral.")
+        st.markdown("### Guía de Capas")
+        st.markdown("🔴 **Calor Oferta:** Polos saturados.")
+        st.markdown("🔵 **Calor Demanda:** Concentración de paso peatonal.")
+        st.markdown("📍 **Detalle de Nodos:** Puntos exactos con el nombre de cada institución (Prender desde el menú del mapa).")
 
     with col1:
         centro_lat = df_cafes_ciudad['lat'].mean() if not df_cafes_ciudad.empty else -38.0
@@ -142,15 +137,31 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
         mapa = folium.Map(location=[centro_lat, centro_lon], zoom_start=14, tiles="CartoDB dark_matter")
         
         if not df_trafico_ciudad.empty:
-            capa_trafico = folium.FeatureGroup(name="🚶‍♂️ Tráfico Peatonal (Demanda)")
+            # Capa 1: Calor del tráfico (Mancha)
+            capa_calor_trafico = folium.FeatureGroup(name="🚶‍♂️ Densidad Peatonal (Calor)")
             HeatMap(
                 df_trafico_ciudad[['lat', 'lon', 'peso']].values.tolist(),
                 radius=15, blur=15, min_opacity=0.4,
                 gradient={0.4: 'navy', 0.6: 'blue', 1: 'cyan'} 
-            ).add_to(capa_trafico)
-            capa_trafico.add_to(mapa)
+            ).add_to(capa_calor_trafico)
+            capa_calor_trafico.add_to(mapa)
+            
+            # Capa 2: Puntos exactos del tráfico con Popups (Nodos)
+            capa_nodos = folium.FeatureGroup(name="📍 Detalle de Instituciones", show=False)
+            for _, row in df_trafico_ciudad.iterrows():
+                tooltip_text = f"<b>{row['tipo_es']}</b><br>{row['nombre']}"
+                folium.CircleMarker(
+                    location=[row['lat'], row['lon']],
+                    radius=4,
+                    color='cyan',
+                    fill=True,
+                    fill_opacity=0.7,
+                    tooltip=tooltip_text
+                ).add_to(capa_nodos)
+            capa_nodos.add_to(mapa)
             
         if not df_cafes_ciudad.empty:
+            # Capa 3: Calor de Cafeterías
             capa_cafes = folium.FeatureGroup(name="☕ Cafeterías (Oferta)")
             HeatMap(
                 df_cafes_ciudad[['lat', 'lon']].values.tolist(),
