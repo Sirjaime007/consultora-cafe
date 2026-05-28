@@ -15,7 +15,7 @@ if password != "AdminCafe2026":
     st.stop()
 
 st.title("🔥 Inteligencia B2B: Oferta vs Demanda")
-st.markdown("Cruce de competencia contra tráfico peatonal e instituciones clave.")
+st.markdown("Cruce de competencia contra tráfico peatonal, polos comerciales e instituciones clave.")
 
 # --- 2. FUENTE DE DATOS 1: CAFETERÍAS ---
 SHEET_ID = "10vUOhRr7IAXlRrkBphxEP4ApXYBgrnuxJq6G83GnfHI"
@@ -47,50 +47,75 @@ def cargar_cafeterias():
             pass
     return pd.DataFrame(locales)
 
-# --- 3. FUENTE DE DATOS 2: TRÁFICO PEATONAL DETALLADO ---
+# --- 3. FUENTE DE DATOS 2: TRÁFICO COMERCIAL Y PEATONAL DETALLADO ---
 @st.cache_data(ttl=86400)
 def obtener_trafico(ciudad):
     ciudad_query = "Ciudad Autónoma de Buenos Aires" if ciudad == "Buenos Aires" else ciudad
+    
+    # Ampliamos la búsqueda para incluir shops, restaurantes, hoteles y bares (nwr = nodes, ways, relations)
     query = f"""
-    [out:json][timeout:90];
+    [out:json][timeout:120];
     area["name"="{ciudad_query}"]->.searchArea;
     (
-      node["amenity"~"bank|hospital|clinic|school|university"](area.searchArea);
+      nwr["amenity"~"bank|hospital|clinic|school|university|restaurant|bar|fast_food|marketplace"](area.searchArea);
+      nwr["shop"](area.searchArea);
+      nwr["tourism"~"hotel|museum|attraction"](area.searchArea);
       node["highway"="bus_stop"](area.searchArea);
     );
     out center;
     """
     url = "http://overpass-api.de/api/interpreter"
-    headers = {'User-Agent': 'ConsultoraCafeB2B/1.1'}
+    headers = {'User-Agent': 'ConsultoraCafeB2B/2.0'}
     
     traducciones = {
         'hospital': 'Hospital', 'university': 'Universidad', 'bank': 'Banco',
-        'clinic': 'Clínica', 'school': 'Escuela', 'bus_stop': 'Parada de Colectivo'
+        'clinic': 'Clínica', 'school': 'Escuela', 'bus_stop': 'Parada de Colectivo',
+        'restaurant': 'Restaurante', 'bar': 'Bar/Cervecería', 'fast_food': 'Comida Rápida',
+        'hotel': 'Hotel', 'marketplace': 'Mercado/Feria'
     }
     
     try:
-        res = requests.post(url, data={'data': query}, headers=headers, timeout=100)
+        res = requests.post(url, data={'data': query}, headers=headers, timeout=120)
         if res.status_code != 200:
             return pd.DataFrame()
         data = res.json()
         puntos = []
         for e in data.get('elements', []):
-            if 'lat' in e and 'lon' in e:
+            # Overpass devuelve 'center' para polígonos (como edificios o shoppings) y 'lat'/'lon' para nodos
+            lat = e.get('lat') or e.get('center', {}).get('lat')
+            lon = e.get('lon') or e.get('center', {}).get('lon')
+            
+            if lat and lon:
                 tags = e.get('tags', {})
-                tipo_raw = tags.get('amenity', 'bus_stop')
-                tipo_es = traducciones.get(tipo_raw, tipo_raw.capitalize())
                 
-                # Intentamos sacar el nombre exacto de la institución, si no tiene, usamos el tipo
+                # Identificar qué es
+                if 'shop' in tags:
+                    tipo_raw = 'shop'
+                    tipo_es = f"Local Comercial ({tags['shop'].capitalize()})"
+                elif 'tourism' in tags:
+                    tipo_raw = tags['tourism']
+                    tipo_es = traducciones.get(tipo_raw, tipo_raw.capitalize())
+                else:
+                    tipo_raw = tags.get('amenity', 'bus_stop')
+                    tipo_es = traducciones.get(tipo_raw, tipo_raw.capitalize())
+                
                 nombre = tags.get('name', 'Sin nombre registrado')
                 
-                peso = 3.0 if tipo_raw in ['hospital', 'university'] else 2.0 if tipo_raw in ['bank', 'clinic', 'school'] else 1.0
+                # Ponderación del peso
+                if tipo_raw in ['hospital', 'university', 'mall']:
+                    peso = 3.0
+                elif tipo_raw in ['bank', 'school', 'hotel', 'restaurant', 'bar']:
+                    peso = 2.0
+                else:
+                    peso = 1.0 # Shops individuales, paradas, etc.
                 
                 puntos.append({
-                    'lat': e['lat'], 'lon': e['lon'], 'peso': peso,
+                    'lat': lat, 'lon': lon, 'peso': peso,
                     'tipo_es': tipo_es, 'nombre': nombre
                 })
         return pd.DataFrame(puntos)
-    except:
+    except Exception as ex:
+        print("Error en API:", ex)
         return pd.DataFrame()
 
 with st.spinner("Conectando con base de datos privada..."):
@@ -121,14 +146,15 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
         df_cafes_ciudad = df_cafes[df_cafes['ciudad'] == ciudad_seleccionada]
         st.metric("Cafeterías (Competencia)", len(df_cafes_ciudad))
         
-        with st.spinner("Descargando tráfico peatonal detallado..."):
+        with st.spinner("Descargando mapa comercial (puede tardar por volumen de datos)..."):
             df_trafico_ciudad = obtener_trafico(ciudad_seleccionada)
-        st.metric("Nodos de Tráfico", len(df_trafico_ciudad))
+            
+        st.metric("Puntos de Interés/Comercios", len(df_trafico_ciudad))
         
         st.markdown("### Guía de Capas")
         st.markdown("🔴 **Calor Oferta:** Polos saturados.")
-        st.markdown("🔵 **Calor Demanda:** Concentración de paso peatonal.")
-        st.markdown("📍 **Detalle de Nodos:** Puntos exactos con el nombre de cada institución (Prender desde el menú del mapa).")
+        st.markdown("🔵 **Calor Demanda:** Comercios, gastronomía, bancos y hospitales.")
+        st.markdown("📍 **Detalle de Nodos:** Prender desde el menú del mapa para ver los nombres de los locales y lugares.")
 
     with col1:
         centro_lat = df_cafes_ciudad['lat'].mean() if not df_cafes_ciudad.empty else -38.0
@@ -137,8 +163,7 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
         mapa = folium.Map(location=[centro_lat, centro_lon], zoom_start=14, tiles="CartoDB dark_matter")
         
         if not df_trafico_ciudad.empty:
-            # Capa 1: Calor del tráfico (Mancha)
-            capa_calor_trafico = folium.FeatureGroup(name="🚶‍♂️ Densidad Peatonal (Calor)")
+            capa_calor_trafico = folium.FeatureGroup(name="🚶‍♂️ Densidad Comercial/Peatonal")
             HeatMap(
                 df_trafico_ciudad[['lat', 'lon', 'peso']].values.tolist(),
                 radius=15, blur=15, min_opacity=0.4,
@@ -146,8 +171,7 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
             ).add_to(capa_calor_trafico)
             capa_calor_trafico.add_to(mapa)
             
-            # Capa 2: Puntos exactos del tráfico con Popups (Nodos)
-            capa_nodos = folium.FeatureGroup(name="📍 Detalle de Instituciones", show=False)
+            capa_nodos = folium.FeatureGroup(name="📍 Detalle de Locales/Instituciones", show=False)
             for _, row in df_trafico_ciudad.iterrows():
                 tooltip_text = f"<b>{row['tipo_es']}</b><br>{row['nombre']}"
                 folium.CircleMarker(
@@ -161,8 +185,7 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
             capa_nodos.add_to(mapa)
             
         if not df_cafes_ciudad.empty:
-            # Capa 3: Calor de Cafeterías
-            capa_cafes = folium.FeatureGroup(name="☕ Cafeterías (Oferta)")
+            capa_cafes = folium.FeatureGroup(name="☕ Cafeterías (Competencia)")
             HeatMap(
                 df_cafes_ciudad[['lat', 'lon']].values.tolist(),
                 radius=20, blur=15, min_opacity=0.5,
