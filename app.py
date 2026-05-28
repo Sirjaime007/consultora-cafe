@@ -32,8 +32,11 @@ def cargar_cafeterias():
         try:
             df = pd.read_csv(url)
             df.columns = [str(c).upper().strip() for c in df.columns]
+            
+            # Buscamos columnas de coordenadas y nombre
             lat_col = next((col for col in df.columns if col in ['LAT', 'LATITUD']), None)
             lon_col = next((col for col in df.columns if col in ['LONG', 'LONGITUD', 'LNG']), None)
+            nombre_col = next((col for col in df.columns if col in ['CAFE', 'NOMBRE', 'LOCAL']), None)
             
             if lat_col and lon_col:
                 df[lat_col] = df[lat_col].astype(str).str.replace(',', '.')
@@ -41,8 +44,15 @@ def cargar_cafeterias():
                 df['LAT_CLEAN'] = pd.to_numeric(df[lat_col], errors='coerce')
                 df['LON_CLEAN'] = pd.to_numeric(df[lon_col], errors='coerce')
                 df_valid = df.dropna(subset=['LAT_CLEAN', 'LON_CLEAN'])
+                
                 for _, row in df_valid.iterrows():
-                    locales.append({'ciudad': ciudad, 'lat': row['LAT_CLEAN'], 'lon': row['LON_CLEAN']})
+                    nombre_cafe = row[nombre_col] if nombre_col and pd.notna(row[nombre_col]) else "Café"
+                    locales.append({
+                        'ciudad': ciudad, 
+                        'lat': row['LAT_CLEAN'], 
+                        'lon': row['LON_CLEAN'],
+                        'nombre': nombre_cafe
+                    })
         except Exception:
             pass
     return pd.DataFrame(locales)
@@ -107,7 +117,6 @@ def obtener_trafico(ciudad):
                 })
         return pd.DataFrame(puntos)
     except Exception as ex:
-        print("Error en API:", ex)
         return pd.DataFrame()
 
 with st.spinner("Conectando con base de datos privada..."):
@@ -131,22 +140,24 @@ st.sidebar.info(f"☕ **Demanda Estimada:** {clientes_diarios} clientes/día")
 
 # --- 5. RENDERIZADO LIGERO DEL MAPA ---
 if ciudad_seleccionada != "Seleccionar Ciudad...":
-    col1, col2 = st.columns([3, 1])
+    # Ampliamos la proporción del mapa para que ocupe más ancho en la tablet (4:1 en vez de 3:1)
+    col1, col2 = st.columns([4, 1])
     
     with col2:
-        st.subheader("Métricas del Mapa")
+        st.subheader("Métricas")
         df_cafes_ciudad = df_cafes[df_cafes['ciudad'] == ciudad_seleccionada]
-        st.metric("Cafeterías (Competencia)", len(df_cafes_ciudad))
+        st.metric("Competencia", len(df_cafes_ciudad))
         
         with st.spinner("Descargando mapa comercial..."):
             df_trafico_ciudad = obtener_trafico(ciudad_seleccionada)
             
-        st.metric("Puntos de Interés Total", len(df_trafico_ciudad))
+        st.metric("Puntos de Interés", len(df_trafico_ciudad))
         
         st.markdown("### Guía de Capas")
-        st.markdown("🔴 **Calor Oferta:** Polos saturados.")
-        st.markdown("🔵 **Calor Demanda:** Comercios, gastronomía, instituciones.")
-        st.markdown("📍 **Detalle Anclas:** Muestra solo hospitales, universidades, shoppings y bancos para no saturar el mapa.")
+        st.markdown("🔴 **Oferta:** Polos saturados.")
+        st.markdown("🔵 **Demanda:** Comercios, instituciones.")
+        st.markdown("📍 **Anclas:** Hospitales, shoppings y bancos.")
+        st.markdown("🏷️ **Nombres:** Prendelo para ver qué café es cada uno.")
 
     with col1:
         centro_lat = df_cafes_ciudad['lat'].mean() if not df_cafes_ciudad.empty else -38.0
@@ -155,7 +166,6 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
         mapa = folium.Map(location=[centro_lat, centro_lon], zoom_start=14, tiles="CartoDB dark_matter")
         
         if not df_trafico_ciudad.empty:
-            # 1. Capa de Calor usa TODOS los puntos (los 2300+)
             capa_calor_trafico = folium.FeatureGroup(name="🚶‍♂️ Densidad Comercial/Peatonal")
             HeatMap(
                 df_trafico_ciudad[['lat', 'lon', 'peso']].values.tolist(),
@@ -164,7 +174,6 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
             ).add_to(capa_calor_trafico)
             capa_calor_trafico.add_to(mapa)
             
-            # 2. Capa de Nodos SOLO usa los de peso >= 2.0 (Anclas principales) para no crashear la tablet
             df_nodos_importantes = df_trafico_ciudad[df_trafico_ciudad['peso'] >= 2.0]
             capa_nodos = folium.FeatureGroup(name="📍 Detalle Anclas Principales", show=False)
             
@@ -181,19 +190,31 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
             capa_nodos.add_to(mapa)
             
         if not df_cafes_ciudad.empty:
-            # 3. Capa de Calor de Cafeterías
-            capa_cafes = folium.FeatureGroup(name="☕ Cafeterías (Competencia)")
+            capa_cafes = folium.FeatureGroup(name="☕ Calor Cafeterías (Competencia)")
             HeatMap(
                 df_cafes_ciudad[['lat', 'lon']].values.tolist(),
                 radius=20, blur=15, min_opacity=0.5,
                 gradient={0.4: 'orange', 0.6: 'red', 1: 'darkred'} 
             ).add_to(capa_cafes)
             capa_cafes.add_to(mapa)
+
+            # NUEVA CAPA: Nombres de las cafeterías (Apagada por defecto)
+            capa_nombres_cafes = folium.FeatureGroup(name="🏷️ Nombres de Cafeterías", show=False)
+            for _, row in df_cafes_ciudad.iterrows():
+                folium.CircleMarker(
+                    location=[row['lat'], row['lon']],
+                    radius=5,
+                    color='orange',
+                    fill=True,
+                    fill_opacity=0.9,
+                    tooltip=f"<b>{row['nombre']}</b>"
+                ).add_to(capa_nombres_cafes)
+            capa_nombres_cafes.add_to(mapa)
             
         folium.LayerControl(collapsed=False).add_to(mapa)
         
-        # 4. Renderizado HTML ultraligero (reemplaza a st_folium)
-        components.html(mapa._repr_html_(), height=600)
+        # Aumentamos la altura de 600 a 750 para que sea mucho más inmersivo
+        components.html(mapa._repr_html_(), height=750)
 
 else:
     st.info("👈 Seleccioná una ciudad en el menú lateral para iniciar el análisis.")
