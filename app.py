@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import folium
-from folium.plugins import HeatMap
+from folium.plugins import HeatMap, MarkerCluster
 import streamlit.components.v1 as components
 import requests
 
@@ -56,13 +56,11 @@ def cargar_cafeterias():
             pass
     return pd.DataFrame(locales)
 
-# --- 3. FUENTE DE DATOS 2: TRÁFICO Y MEDIOS DE TRANSPORTE (AHORA POR BARRIO) ---
+# --- 3. FUENTE DE DATOS 2: TRÁFICO Y MEDIOS DE TRANSPORTE (POR BARRIO) ---
 @st.cache_data(ttl=86400)
 def obtener_trafico(ciudad, barrio=None):
-    # Lógica inteligente para subdividir CABA
     if ciudad == "Buenos Aires":
         if barrio and barrio != "Todo CABA (Lento)":
-            # Le decimos a la API que busque el barrio DENTRO de CABA para no confundirse con otras ciudades
             area_query = f'''
             area["name"="Ciudad Autónoma de Buenos Aires"]->.caba;
             area(area.caba)["name"="{barrio}"]->.searchArea;
@@ -85,7 +83,7 @@ def obtener_trafico(ciudad, barrio=None):
     out center;
     """
     url = "http://overpass-api.de/api/interpreter"
-    headers = {'User-Agent': 'ConsultoraCafeB2B/4.0'}
+    headers = {'User-Agent': 'ConsultoraCafeB2B/5.0'}
     
     traducciones = {
         'hospital': 'Hospital', 'university': 'Universidad', 'bank': 'Banco',
@@ -165,30 +163,29 @@ clientes_diarios = int(pea_total * (captacion / 100))
 
 st.sidebar.info(f"☕ **Demanda Estimada:** {clientes_diarios} clientes/día")
 
-# --- 5. RENDERIZADO DEL MAPA ---
+# --- 5. RENDERIZADO OPTIMIZADO PARA TABLETS ---
 if ciudad_seleccionada != "Seleccionar Ciudad...":
     col1, col2 = st.columns([4, 1])
     
     with col2:
         st.subheader("Métricas")
         df_cafes_ciudad = df_cafes[df_cafes['ciudad'] == ciudad_seleccionada]
-        st.metric("Cafeterías Globales (Ciudad)", len(df_cafes_ciudad))
+        st.metric("Cafeterías (Ciudad)", len(df_cafes_ciudad))
         
-        zona_msj = f"{barrio_seleccionado}, {ciudad_seleccionada}" if barrio_seleccionado else ciudad_seleccionada
+        zona_msj = f"{barrio_seleccionado}" if barrio_seleccionado else ciudad_seleccionada
         with st.spinner(f"Analizando tráfico en {zona_msj}..."):
             df_trafico_ciudad = obtener_trafico(ciudad_seleccionada, barrio_seleccionado)
             
         st.metric("Puntos de Interés (Zona)", len(df_trafico_ciudad))
         
         st.markdown("### Guía de Capas")
-        st.markdown("🔴 **Oferta:** Polos saturados.")
+        st.markdown("🔴 **Oferta:** Calor de competencia.")
         st.markdown("🔵 **Demanda:** Subtes, trenes, comercios.")
-        st.markdown("📍 **Anclas:** Bancos, Hospitales.")
-        st.markdown("🚌 **Colectivos:** Paradas (Prender manual).")
-        st.markdown("🏷️ **Nombres:** Identifica tu base de datos.")
+        st.markdown("🏷️ **Competidores (Nombres):** Agrupados inteligentemente para no tildar la tablet.")
+        st.markdown("📍 **Anclas:** Los principales nodos de tráfico (Hospitales, Bancos, Shoppings).")
 
     with col1:
-        # Centramos el mapa inteligentemente: Si filtramos un barrio, que se centre en el tráfico de ese barrio.
+        # Centrado inteligente
         if not df_trafico_ciudad.empty:
             centro_lat = df_trafico_ciudad['lat'].mean()
             centro_lon = df_trafico_ciudad['lon'].mean()
@@ -199,42 +196,30 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
         mapa = folium.Map(location=[centro_lat, centro_lon], zoom_start=15 if barrio_seleccionado else 13, tiles="CartoDB dark_matter")
         
         if not df_trafico_ciudad.empty:
-            df_calor_trafico = df_trafico_ciudad
-            if len(df_calor_trafico) > 8000:
-                df_calor_trafico = df_calor_trafico.sample(n=8000, random_state=42)
-
+            # CAPA 1: Mancha de calor de la demanda (Usa todos los puntos, es súper liviana)
             capa_calor_trafico = folium.FeatureGroup(name="🚶‍♂️ Densidad Comercial/Peatonal")
             HeatMap(
-                df_calor_trafico[['lat', 'lon', 'peso']].values.tolist(),
+                df_trafico_ciudad[['lat', 'lon', 'peso']].values.tolist(),
                 radius=15, blur=15, min_opacity=0.4,
                 gradient={0.4: 'navy', 0.6: 'blue', 1: 'cyan'} 
             ).add_to(capa_calor_trafico)
             capa_calor_trafico.add_to(mapa)
             
+            # CAPA 2: Nodos Clickeables (Top 150 máximo para cuidar la memoria)
             df_nodos_importantes = df_trafico_ciudad[(df_trafico_ciudad['peso'] >= 2.0) & (df_trafico_ciudad['tipo_raw'] != 'bus_stop')]
-            if len(df_nodos_importantes) > 1500:
-                df_nodos_importantes = df_nodos_importantes.sample(n=1500, random_state=42)
+            if len(df_nodos_importantes) > 150:
+                df_nodos_importantes = df_nodos_importantes.sample(n=150, random_state=42)
 
             capa_nodos = folium.FeatureGroup(name="📍 Detalle Anclas Principales", show=False)
             for _, row in df_nodos_importantes.iterrows():
                 tooltip_text = f"<b>{row['tipo_es']}</b><br>{row['nombre']}"
                 folium.CircleMarker(
-                    location=[row['lat'], row['lon']], radius=4, color='cyan', fill=True, fill_opacity=0.7, tooltip=tooltip_text
+                    location=[row['lat'], row['lon']], radius=5, color='cyan', fill=True, fill_opacity=0.8, tooltip=tooltip_text
                 ).add_to(capa_nodos)
             capa_nodos.add_to(mapa)
             
-            df_colectivos = df_trafico_ciudad[df_trafico_ciudad['tipo_raw'] == 'bus_stop']
-            if len(df_colectivos) > 1000: 
-                df_colectivos = df_colectivos.sample(n=1000, random_state=42)
-                
-            capa_colectivos = folium.FeatureGroup(name="🚌 Paradas de Colectivo", show=False)
-            for _, row in df_colectivos.iterrows():
-                folium.CircleMarker(
-                    location=[row['lat'], row['lon']], radius=3, color='gray', fill=True, fill_opacity=0.8, tooltip="Parada de Colectivo"
-                ).add_to(capa_colectivos)
-            capa_colectivos.add_to(mapa)
-            
         if not df_cafes_ciudad.empty:
+            # CAPA 3: Mancha de calor de la Oferta (Cafeterías)
             capa_cafes = folium.FeatureGroup(name="☕ Calor Cafeterías (Competencia)")
             HeatMap(
                 df_cafes_ciudad[['lat', 'lon']].values.tolist(),
@@ -243,14 +228,22 @@ if ciudad_seleccionada != "Seleccionar Ciudad...":
             ).add_to(capa_cafes)
             capa_cafes.add_to(mapa)
 
-            capa_nombres_cafes = folium.FeatureGroup(name="🏷️ Nombres de Cafeterías", show=False)
+            # CAPA 4: Nombres de Cafeterías mediante CLUSTERING (Ahorra muchísima memoria RAM)
+            capa_nombres_cafes = folium.FeatureGroup(name="🏷️ Nombres de Cafeterías (Agrupados)", show=False)
+            cluster_cafes = MarkerCluster().add_to(capa_nombres_cafes)
+            
             for _, row in df_cafes_ciudad.iterrows():
-                folium.CircleMarker(
-                    location=[row['lat'], row['lon']], radius=5, color='orange', fill=True, fill_opacity=0.9, tooltip=f"<b>{row['nombre']}</b>"
-                ).add_to(capa_nombres_cafes)
+                folium.Marker(
+                    location=[row['lat'], row['lon']], 
+                    tooltip=f"<b>{row['nombre']}</b>",
+                    icon=folium.Icon(color='orange', icon='coffee', prefix='fa')
+                ).add_to(cluster_cafes)
+                
             capa_nombres_cafes.add_to(mapa)
             
         folium.LayerControl(collapsed=False).add_to(mapa)
+        
+        # Renderizado de la ventana
         components.html(mapa._repr_html_(), height=750)
 
 else:
