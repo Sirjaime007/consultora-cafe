@@ -18,11 +18,10 @@ st.title("📊 Inteligencia Comercial: Mapa B2B")
 st.markdown("Cruce de densidad de tráfico peatonal (hospitales, bancos, colegios, paradas) y mercado potencial.")
 
 # --- 2. EXTRACCIÓN AUTOMÁTICA EN LA NUBE ---
-# Usamos cache para que solo descargue la info 1 vez por día y no colapse la tablet
 @st.cache_data(ttl=86400) 
 def obtener_datos_trafico():
     query = """
-    [out:json][timeout:25];
+    [out:json][timeout:90];
     geocodeArea("Mar del Plata, Argentina")->.searchArea;
     (
       node["amenity"~"bank|hospital|clinic|school|university"](area.searchArea);
@@ -31,20 +30,38 @@ def obtener_datos_trafico():
     out center;
     """
     url = "http://overpass-api.de/api/interpreter"
-    res = requests.post(url, data={'data': query})
-    data = res.json()
     
-    puntos = []
-    for e in data['elements']:
-        if 'lat' in e and 'lon' in e:
-            tipo = e.get('tags', {}).get('amenity', 'bus_stop')
-            # Hospitales y facultades pesan más que un banco o parada
-            peso = 3.0 if tipo in ['hospital', 'university'] else 2.0 if tipo in ['bank', 'clinic', 'school'] else 1.0
-            puntos.append({'lat': e['lat'], 'lon': e['lon'], 'peso': peso})
-    return pd.DataFrame(puntos)
+    # 1. Le decimos a la API quiénes somos para que no nos bloquee
+    headers = {'User-Agent': 'ConsultoraCafeApp/1.0'}
+    
+    try:
+        # 2. Hacemos la petición con límite de tiempo
+        res = requests.post(url, data={'data': query}, headers=headers, timeout=100)
+        
+        # 3. Chequeamos que el servidor haya respondido "OK" (Código 200)
+        if res.status_code != 200:
+            st.warning(f"⚠️ El servidor de mapas está saturado (Error {res.status_code}). Reintentá en un minuto.")
+            return pd.DataFrame(columns=['lat', 'lon', 'peso']) # Devolvemos tabla vacía para que no crashee
+            
+        data = res.json()
+        
+        puntos = []
+        for e in data.get('elements', []):
+            if 'lat' in e and 'lon' in e:
+                tipo = e.get('tags', {}).get('amenity', 'bus_stop')
+                # Hospitales y facultades pesan más que un banco o parada
+                peso = 3.0 if tipo in ['hospital', 'university'] else 2.0 if tipo in ['bank', 'clinic', 'school'] else 1.0
+                puntos.append({'lat': e['lat'], 'lon': e['lon'], 'peso': peso})
+                
+        return pd.DataFrame(puntos)
+        
+    except requests.exceptions.JSONDecodeError:
+        st.warning("⚠️ La API de mapas devolvió un error de texto. Refrescá la página en un momento.")
+        return pd.DataFrame(columns=['lat', 'lon', 'peso'])
+    except Exception as e:
+        st.warning(f"⚠️ Hubo un problema de conexión: {e}")
+        return pd.DataFrame(columns=['lat', 'lon', 'peso'])
 
-with st.spinner("Escaneando Mar del Plata (esto tarda unos segundos la primera vez)..."):
-    df_trafico = obtener_datos_trafico()
 
 # --- 3. FILTROS Y CALCULADORA PEA ---
 col1, col2 = st.columns([1, 3])
