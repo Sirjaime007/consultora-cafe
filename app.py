@@ -10,7 +10,7 @@ st.set_page_config(page_title="Consultora Café B2B", layout="wide")
 st.sidebar.title("🔐 Acceso Privado")
 password = st.sidebar.text_input("Contraseña", type="password")
 
-if password != "AdminCafe2026": 
+if password != "Simon008": 
     st.warning("✋ Ingresá la contraseña para acceder al panel.")
     st.stop()
 
