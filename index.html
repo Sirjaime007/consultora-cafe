@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Análisis Café MDQ</title>
+    <title>Análisis de Mercado Café MDQ</title>
     
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -12,25 +12,27 @@
         body { margin: 0; padding: 0; font-family: sans-serif; }
         #map { height: 100vh; width: 100%; }
         
-        /* Panel de control superpuesto */
+        /* Panel de control */
         #control-panel {
             position: absolute;
-            top: 10px;
-            right: 10px;
+            top: 15px;
+            right: 15px;
             background: white;
             padding: 15px;
             border-radius: 8px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
             z-index: 1000;
+            width: 200px;
         }
         
-        select { padding: 8px; font-size: 14px; margin-top: 5px; width: 100%; }
+        select { padding: 8px; font-size: 14px; margin-top: 10px; width: 100%; cursor: pointer;}
+        h3 { margin: 0 0 10px 0; font-size: 16px; color: #333;}
     </style>
 </head>
 <body>
 
     <div id="control-panel">
-        <strong>Mapa de Calor</strong><br>
+        <h3>Filtro de Calor</h3>
         <select id="indice-selector">
             <option value="Indice Flat">Índice Flat White</option>
             <option value="Indice Cortado">Índice Cortado</option>
@@ -43,96 +45,102 @@
     <!-- Librerías JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
-    <!-- PapaParse para leer el Google Sheet -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
 
     <script>
-        // 1. Configuración del Mapa (Centrado en MDQ)
+        // Iniciar el mapa centrado en Mar del Plata
         const map = L.map('map').setView([-38.005, -57.545], 13);
 
+        // Capa base del mapa (clara, para que resalte el calor)
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; OpenStreetMap contributors & CARTO',
+            attribution: '&copy; OpenStreetMap & CARTO',
             maxZoom: 19
         }).addTo(map);
 
         let heatLayer;
         let cafesData = [];
 
-        // 2. URL de tu Google Sheet
-        // IMPORTANTE: Reemplazá "TU_ID_DEL_DOCUMENTO" por el ID real que está en la URL de tu hoja
-        const sheetId = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQKWHZjUoyHujPoj5kaTJzj-O8K-GBReU2XS_ul1zNhV9nKkDC6ndE2YPgPjElaY-IHXVxcxKWKqs6t/pub?output=csv'; 
+        // Conexión DIRECTA a tu Google Sheet (No se cambia nunca más)
+        const sheetId = '1RLFtalcyVO_sKGdx8zY80bDFGJDZ4PTfPV_tAPEN-dU'; 
         const gid = '1166583340';
         const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
 
-        // 3. Procesar los datos
+        // Leer datos y renderizar
         Papa.parse(csvUrl, {
             download: true,
             header: true,
+            skipEmptyLines: true,
             complete: function(results) {
                 const data = results.data;
                 
                 data.forEach(row => {
+                    // Convertir texto a números
                     const lat = parseFloat(row.LAT);
                     const lng = parseFloat(row.LONG);
                     
-                    // Verificamos que tenga coordenadas y que los índices existan 
-                    // (Descartamos números gigantes > 5 o vacíos)
-                    const idxFlat = parseFloat(row['Indice Flat']);
+                    // Asegurar que la coma de los miles no rompa el parseFloat en JS
+                    let rawFlat = row['Indice Flat'] ? row['Indice Flat'].replace(',', '.') : '0';
+                    let rawCortado = row['Indice Cortado'] ? row['Indice Cortado'].replace(',', '.') : '0';
+                    let rawExpresso = row['Indice Expresso'] ? row['Indice Expresso'].replace(',', '.') : '0';
+
+                    const idxFlat = parseFloat(rawFlat);
+                    const idxCortado = parseFloat(rawCortado);
+                    const idxExpresso = parseFloat(rawExpresso);
                     
+                    // Filtrar filas vacías o sin índices reales
                     if (!isNaN(lat) && !isNaN(lng) && !isNaN(idxFlat) && idxFlat > 0 && idxFlat < 5) {
                         
-                        // Guardamos la data limpia
                         cafesData.push({
                             nombre: row.CAFE,
                             zona: row.ZONA,
                             lat: lat,
                             lng: lng,
-                            'Indice Expresso': parseFloat(row['Indice Expresso']),
-                            'Indice Cortado': parseFloat(row['Indice Cortado']),
+                            'Indice Expresso': idxExpresso,
+                            'Indice Cortado': idxCortado,
                             'Indice Flat': idxFlat,
-                            precioFlat: row.Flat
+                            precioFlat: row.Flat,
+                            ig: row.INSTAGRAM
                         });
 
-                        // Agregar marcador al mapa
+                        // Marcadores interactivos
                         const marker = L.marker([lat, lng]).addTo(map);
                         marker.bindPopup(`
-                            <strong>${row.CAFE}</strong><br>
-                            Zona: ${row.ZONA}<br>
-                            Precio Flat: $${row.Flat}<br>
-                            Índice Flat: ${idxFlat}
+                            <strong style="font-size:14px;">${row.CAFE}</strong><br>
+                            <span style="color:gray;">Zona: ${row.ZONA}</span><br>
+                            <hr style="margin:5px 0;">
+                            Precio Flat: <strong>$${row.Flat}</strong><br>
+                            Índice Local: <strong>${idxFlat}</strong>
                         `);
                     }
                 });
 
-                // Inicializar mapa de calor
+                // Cargar el mapa de calor inicial
                 renderHeatmap('Indice Flat');
             }
         });
 
-        // 4. Renderizar o actualizar el mapa de calor
+        // Función para pintar el mapa de calor
         function renderHeatmap(columnaIndice) {
             if (heatLayer) {
                 map.removeLayer(heatLayer);
             }
 
-            // Mapeamos los datos para el formato de leaflet-heat: [lat, lng, intensidad]
             const heatData = cafesData.map(cafe => {
                 const intensidad = cafe[columnaIndice] || 1;
                 return [cafe.lat, cafe.lng, intensidad];
             });
 
-            // Configuramos el plugin de calor
-            // max: 1.5 ayuda a que los índices por encima de la media resalten en rojo
+            // Parámetros de diseño del mapa de calor
             heatLayer = L.heatLayer(heatData, {
-                radius: 40,
-                blur: 25,
-                maxZoom: 14,
-                max: 1.5, 
-                gradient: {0.4: 'blue', 0.6: 'cyan', 0.8: 'lime', 1.0: 'yellow', 1.2: 'red'}
+                radius: 35,
+                blur: 20,
+                maxZoom: 15,
+                max: 1.3, // Los valores > 1.3 se verán rojo intenso
+                gradient: {0.4: 'blue', 0.6: 'cyan', 0.8: 'lime', 1.0: 'orange', 1.2: 'red'}
             }).addTo(map);
         }
 
-        // 5. Escuchar cambios en el selector
+        // Cambiar el mapa de calor con el menú
         document.getElementById('indice-selector').addEventListener('change', function(e) {
             renderHeatmap(e.target.value);
         });
