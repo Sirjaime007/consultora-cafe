@@ -137,9 +137,17 @@
 
                     const parseIdx = (v) => {
                         if (v === undefined || v === null || v === '') return null;
-                        const n = parseFloat(v.toString().replace(',', '.'));
-                        // -1 es el valor "sin precio" para esa bebida: se descarta
-                        if (isNaN(n) || n === -1) return null;
+                        let s = v.toString().trim();
+                        // Google Sheets exporta las celdas con formato % como texto
+                        // "-11.14%" en vez del número -0.1114. Si viene con %, hay
+                        // que sacarlo y dividir por 100 para volver a la escala decimal.
+                        const esPorcentaje = s.includes('%');
+                        s = s.replace('%', '').replace(',', '.');
+                        let n = parseFloat(s);
+                        if (isNaN(n)) return null;
+                        if (esPorcentaje) n = n / 100;
+                        // -1 (-100%) es el valor "sin precio" para esa bebida: se descarta
+                        if (n <= -0.99) return null;
                         return n;
                     };
 
