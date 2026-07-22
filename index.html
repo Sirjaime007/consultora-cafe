@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Análisis de Mercado Café MDQ</title>
 
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
 
     <style>
         body { margin: 0; padding: 0; font-family: sans-serif; }
@@ -81,11 +81,17 @@
 
     <div id="map"></div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js" onerror="document.getElementById('status').textContent='No cargó Leaflet (revisá tu conexión / bloqueador de anuncios)'; document.getElementById('status').style.color='red';"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js" onerror="document.getElementById('status').textContent='No cargó el plugin de mapa de calor'; document.getElementById('status').style.color='red';"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js" onerror="document.getElementById('status').textContent='No cargó PapaParse'; document.getElementById('status').style.color='red';"></script>
 
     <script>
+        if (typeof L === 'undefined') {
+            document.getElementById('status').textContent = 'Error: Leaflet no cargó. Probá recargar la página.';
+            document.getElementById('status').style.color = 'red';
+            throw new Error('Leaflet (L) no está disponible - abortando script del mapa.');
+        }
+
         const map = L.map('map').setView([-38.005, -57.545], 13);
 
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
