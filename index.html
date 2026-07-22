@@ -4,14 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Análisis de Mercado Café MDQ</title>
-    
-    <!-- Leaflet CSS -->
+
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    
+
     <style>
         body { margin: 0; padding: 0; font-family: sans-serif; }
         #map { height: 100vh; width: 100%; }
-        
+
         #control-panel {
             position: absolute;
             top: 15px;
@@ -21,22 +20,63 @@
             border-radius: 8px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.3);
             z-index: 1000;
-            width: 200px;
+            width: 220px;
         }
-        
-        select { padding: 8px; font-size: 14px; margin-top: 10px; width: 100%; cursor: pointer;}
-        h3 { margin: 0 0 10px 0; font-size: 16px; color: #333;}
+
+        select { padding: 8px; font-size: 14px; margin-top: 10px; width: 100%; cursor: pointer; }
+        h3 { margin: 0 0 10px 0; font-size: 16px; color: #333; }
+
+        #leyenda {
+            margin-top: 12px;
+            font-size: 12px;
+            color: #555;
+        }
+        #barra-leyenda {
+            height: 10px;
+            width: 100%;
+            border-radius: 4px;
+            margin-top: 4px;
+            background: linear-gradient(to right, #2166ac, #67a9cf, #d1e5f0, #fddbc7, #ef8a62, #b2182b);
+        }
+        #leyenda-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 2px;
+        }
+
+        #status {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            background: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            z-index: 1000;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
     </style>
 </head>
 <body>
 
+    <div id="status">Cargando datos…</div>
+
     <div id="control-panel">
         <h3>Filtro de Calor</h3>
         <select id="indice-selector">
-            <option value="Indice Flat">Índice Flat White</option>
-            <option value="Indice Cortado">Índice Cortado</option>
             <option value="Indice Expresso">Índice Espresso</option>
+            <option value="Indice Cortado">Índice Cortado</option>
+            <option value="Indice Flat" selected>Índice Flat White</option>
         </select>
+
+        <div id="leyenda">
+            Precio vs. promedio de la ciudad
+            <div id="barra-leyenda"></div>
+            <div id="leyenda-labels">
+                <span>Más barato</span>
+                <span>Más caro</span>
+            </div>
+        </div>
     </div>
 
     <div id="map"></div>
@@ -54,95 +94,130 @@
         }).addTo(map);
 
         let heatLayer;
+        let markersLayer = L.layerGroup().addTo(map);
         let cafesData = [];
 
-        const sheetId = '1RLFtalcyVO_sKGdx8zY80bDFGJDZ4PTfPV_tAPEN-dU'; 
+        // ---- CONFIGURACIÓN DE LA HOJA ----
+        const sheetId = '1RLFtalcyVO_sKGdx8zY80bDFGJDZ4PTfPV_tAPEN-dU';
         const gid = '1166583340';
         const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
+
+        // Los nombres de columna en la hoja tienen espacios raros
+        // (" Indice Expresso", " Indice  Cortado", " Indice  Flat").
+        // Los normalizamos acá para no depender de eso.
+        function normalizarHeader(h) {
+            return h.trim().replace(/\s+/g, ' ');
+        }
+
+        const statusEl = document.getElementById('status');
 
         Papa.parse(csvUrl, {
             download: true,
             header: true,
             skipEmptyLines: true,
+            transformHeader: normalizarHeader,
             complete: function(results) {
                 const data = results.data;
-                console.log("Datos crudos de Google Sheets:", data); // Presioná F12 en tu navegador para ver si llegan los datos
-                
+                console.log('Datos crudos de Google Sheets:', data);
+
                 data.forEach(row => {
-                    // FIX: Reemplazar comas por puntos en las coordenadas
+                    if (!row.CAFE) return;
+
                     let rawLat = row.LAT ? row.LAT.toString().replace(',', '.') : '';
                     let rawLng = row.LONG ? row.LONG.toString().replace(',', '.') : '';
-                    
                     const lat = parseFloat(rawLat);
                     const lng = parseFloat(rawLng);
-                    
-                    let rawFlat = row['Indice Flat'] ? row['Indice Flat'].toString().replace(',', '.') : '0';
-                    let rawCortado = row['Indice Cortado'] ? row['Indice Cortado'].toString().replace(',', '.') : '0';
-                    let rawExpresso = row['Indice Expresso'] ? row['Indice Expresso'].toString().replace(',', '.') : '0';
+                    if (isNaN(lat) || isNaN(lng)) return;
 
-                    const idxFlat = parseFloat(rawFlat);
-                    const idxCortado = parseFloat(rawCortado);
-                    const idxExpresso = parseFloat(rawExpresso);
-                    
-                    if (!isNaN(lat) && !isNaN(lng) && !isNaN(idxFlat) && idxFlat > 0 && idxFlat < 5) {
-                        
-                        cafesData.push({
-                            lat: lat,
-                            lng: lng,
-                            'Indice Expresso': idxExpresso,
-                            'Indice Cortado': idxCortado,
-                            'Indice Flat': idxFlat
-                        });
+                    const parseIdx = (v) => {
+                        if (v === undefined || v === null || v === '') return null;
+                        const n = parseFloat(v.toString().replace(',', '.'));
+                        // -1 es el valor "sin precio" para esa bebida: se descarta
+                        if (isNaN(n) || n === -1) return null;
+                        return n;
+                    };
 
-                        const marker = L.marker([lat, lng]).addTo(map);
-                        
-                        // Armado del popup integrando el Instagram
-                        let popupHTML = `
-                            <strong style="font-size:14px;">${row.CAFE}</strong><br>
-                            <span style="color:gray;">Zona: ${row.ZONA}</span><br>
-                        `;
-                        
-                        if(row.INSTAGRAM && row.INSTAGRAM.trim() !== '') {
-                            popupHTML += `<a href="${row.INSTAGRAM}" target="_blank" style="font-size:12px; color:#d62976; text-decoration:none;">📷 Ver Instagram</a><br>`;
+                    cafesData.push({
+                        cafe: row.CAFE,
+                        zona: row.ZONA,
+                        instagram: row.INSTAGRAM,
+                        lat: lat,
+                        lng: lng,
+                        precios: {
+                            'Indice Expresso': { precio: row.Expresso, idx: parseIdx(row['Indice Expresso']) },
+                            'Indice Cortado': { precio: row.Cortado, idx: parseIdx(row['Indice Cortado']) },
+                            'Indice Flat': { precio: row.Flat, idx: parseIdx(row['Indice Flat']) }
                         }
-                        
-                        popupHTML += `
-                            <hr style="margin:5px 0;">
-                            Precio Flat: <strong>$${row.Flat}</strong><br>
-                            Índice Local: <strong>${idxFlat}</strong>
-                        `;
-
-                        marker.bindPopup(popupHTML);
-                    }
+                    });
                 });
 
-                renderHeatmap('Indice Flat');
+                statusEl.textContent = `${cafesData.length} cafés cargados`;
+                setTimeout(() => statusEl.style.display = 'none', 2500);
+
+                renderMapa('Indice Flat');
+            },
+            error: function(err) {
+                statusEl.textContent = 'Error al leer la hoja (¿está compartida como pública?)';
+                statusEl.style.color = 'red';
+                console.error(err);
             }
         });
 
-        function renderHeatmap(columnaIndice) {
-            if (heatLayer) {
-                map.removeLayer(heatLayer);
-            }
+        function renderMapa(columnaIndice) {
+            if (heatLayer) map.removeLayer(heatLayer);
+            markersLayer.clearLayers();
 
-            const heatData = cafesData.map(cafe => {
-                const intensidad = cafe[columnaIndice] || 1;
-                return [cafe.lat, cafe.lng, intensidad];
+            const heatData = [];
+
+            cafesData.forEach(cafe => {
+                const info = cafe.precios[columnaIndice];
+                if (!info || info.idx === null) return; // sin precio para esta bebida
+
+                // Leaflet.heat espera intensidad >= 0. Convertimos el índice
+                // (que va de negativo a positivo) a una escala 0-1 centrada en 0.5.
+                const intensidad = Math.max(0, Math.min(1, 0.5 + info.idx * 2));
+                heatData.push([cafe.lat, cafe.lng, intensidad]);
+
+                const marker = L.circleMarker([cafe.lat, cafe.lng], {
+                    radius: 6,
+                    color: info.idx > 0 ? '#b2182b' : '#2166ac',
+                    fillColor: info.idx > 0 ? '#ef8a62' : '#67a9cf',
+                    fillOpacity: 0.9,
+                    weight: 1
+                });
+
+                let popupHTML = `
+                    <strong style="font-size:14px;">${cafe.cafe}</strong><br>
+                    <span style="color:gray;">Zona: ${cafe.zona || '-'}</span><br>
+                `;
+
+                if (cafe.instagram && cafe.instagram.trim() !== '') {
+                    popupHTML += `<a href="${cafe.instagram}" target="_blank" style="font-size:12px; color:#d62976; text-decoration:none;">📷 Ver Instagram</a><br>`;
+                }
+
+                const signo = info.idx > 0 ? '+' : '';
+                popupHTML += `
+                    <hr style="margin:5px 0;">
+                    Precio: <strong>$${info.precio}</strong><br>
+                    vs. promedio: <strong>${signo}${(info.idx * 100).toFixed(1)}%</strong>
+                `;
+
+                marker.bindPopup(popupHTML);
+                markersLayer.addLayer(marker);
             });
 
             heatLayer = L.heatLayer(heatData, {
                 radius: 35,
                 blur: 20,
                 maxZoom: 15,
-                max: 1.3,
-                gradient: {0.4: 'blue', 0.6: 'cyan', 0.8: 'lime', 1.0: 'orange', 1.2: 'red'}
+                max: 1.0,
+                gradient: { 0.0: '#2166ac', 0.25: '#67a9cf', 0.5: '#d1e5f0', 0.75: '#ef8a62', 1.0: '#b2182b' }
             }).addTo(map);
         }
 
         document.getElementById('indice-selector').addEventListener('change', function(e) {
-            renderHeatmap(e.target.value);
+            renderMapa(e.target.value);
         });
     </script>
 </body>
 </html>
-
