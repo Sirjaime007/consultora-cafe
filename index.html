@@ -18,9 +18,8 @@
         h3 { font-size: 14px; color: #555; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px;}
         
         .stat-card { background: #f9f9f9; padding: 12px; border-radius: 6px; margin-bottom: 10px; border-left: 4px solid #d62976; font-size: 13px; line-height: 1.5; }
-        .list-text { font-size: 12px; color: #666; line-height: 1.4; }
+        .list-text { font-size: 12px; color: #666; line-height: 1.4; margin-top:0;}
 
-        /* Estilos de la Leyenda de Calor */
         #leyenda { margin-top: 15px; font-size: 12px; color: #555; }
         #barra-leyenda {
             height: 10px; width: 100%; border-radius: 4px; margin-top: 4px;
@@ -71,7 +70,7 @@
 
         <h3>📍 Análisis Zonal (~6 cuadras)</h3>
         <div id="cluster-info">
-            <p class="list-text">Hacé clic en cualquier cafetería del mapa para analizar la densidad comercial y el promedio de precios a la redonda (600 metros).</p>
+            <p class="list-text">Hacé clic en un punto del mapa para analizar la competencia a 600 metros a la redonda.</p>
         </div>
     </div>
 
@@ -102,9 +101,14 @@
             return h.trim().replace(/\s+/g, ' ');
         }
 
-        const statusEl = document.getElementById('status');
+        // Limpiador agresivo de moneda (Quita $, comas y espacios, deja solo decimales)
+        function cleanPrice(val) {
+            if (!val) return 0;
+            let clean = val.toString().replace(/\$/g, '').replace(/,/g, '').trim();
+            let parsed = parseFloat(clean);
+            return isNaN(parsed) ? 0 : parsed;
+        }
 
-        // Haversine para distancias (metros)
         function calcularDistancia(lat1, lon1, lat2, lon2) {
             const R = 6371000; 
             const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -115,6 +119,8 @@
             const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
             return R * c; 
         }
+
+        const statusEl = document.getElementById('status');
 
         Papa.parse(csvUrl, {
             download: true,
@@ -133,6 +139,18 @@
                     const lng = parseFloat(rawLng);
                     if (isNaN(lat) || isNaN(lng)) return;
 
+                    // Si no hay columna CIUDAD, la deduce de la ZONA (Ej: "BAHIA BLANCA")
+                    let ciudadAsignada = 'Mar del Plata';
+                    if(row.CIUDAD && row.CIUDAD.trim() !== '') {
+                        ciudadAsignada = row.CIUDAD.trim();
+                    } else if (row.ZONA && row.ZONA.toUpperCase().includes('BAHIA BLANCA')) {
+                        ciudadAsignada = 'Bahia Blanca';
+                    } else if (row.ZONA && row.ZONA.toUpperCase().includes('TANDIL')) {
+                        ciudadAsignada = 'Tandil';
+                    } else if (row.ZONA && row.ZONA.toUpperCase().includes('COSTA')) {
+                        ciudadAsignada = 'La Costa';
+                    }
+
                     const parseIdx = (v) => {
                         if (v === undefined || v === null || v === '') return null;
                         let s = v.toString().trim();
@@ -141,21 +159,21 @@
                         let n = parseFloat(s);
                         if (isNaN(n)) return null;
                         if (esPorcentaje) n = n / 100;
-                        if (n <= -0.99) return null; // Filtra vacíos (-100%)
+                        if (n <= -0.99) return null; 
                         return n;
                     };
 
                     cafesData.push({
                         cafe: row.CAFE,
                         zona: row.ZONA || 'General',
-                        ciudad: row.CIUDAD || 'Mar del Plata',
+                        ciudad: ciudadAsignada,
                         instagram: row.INSTAGRAM,
                         lat: lat,
                         lng: lng,
                         precios: {
-                            'Indice Expresso': { precio: row.Expresso, idx: parseIdx(row['Indice Expresso']) },
-                            'Indice Cortado': { precio: row.Cortado, idx: parseIdx(row['Indice Cortado']) },
-                            'Indice Flat': { precio: row.Flat, idx: parseIdx(row['Indice Flat']) }
+                            'Indice Expresso': { precio: cleanPrice(row.Expresso), idx: parseIdx(row['Indice Expresso']) },
+                            'Indice Cortado': { precio: cleanPrice(row.Cortado), idx: parseIdx(row['Indice Cortado']) },
+                            'Indice Flat': { precio: cleanPrice(row.Flat), idx: parseIdx(row['Indice Flat']) }
                         }
                     });
                 });
@@ -174,15 +192,18 @@
         function actualizarVisualizacion() {
             if (heatLayer) map.removeLayer(heatLayer);
             markersLayer.clearLayers();
-            document.getElementById('cluster-info').innerHTML = '<p class="list-text">Hacé clic en cualquier cafetería del mapa para analizar la densidad comercial y el promedio de precios a la redonda (600 metros).</p>';
+            document.getElementById('cluster-info').innerHTML = '<p class="list-text">Hacé clic en un punto del mapa para analizar la competencia a 600 metros a la redonda.</p>';
 
             const ciudadFiltro = document.getElementById('ciudad-selector').value;
             const columnaIndice = document.getElementById('indice-selector').value;
 
             const cafesFiltrados = cafesData.filter(c => ciudadFiltro === 'ALL' || c.ciudad === ciudadFiltro);
             
+            // Si filtramos por ciudad, centramos el mapa en esa ciudad automáticamente
             if(cafesFiltrados.length > 0 && ciudadFiltro !== 'ALL') {
                 map.setView([cafesFiltrados[0].lat, cafesFiltrados[0].lng], 13);
+            } else if (ciudadFiltro === 'ALL') {
+                map.setView([-38.005, -57.545], 8); // Alejar zoom para ver toda la provincia
             }
 
             const heatData = [];
@@ -191,7 +212,6 @@
                 const info = cafe.precios[columnaIndice];
                 if (!info || info.idx === null) return; 
 
-                // Transforma el porcentaje (ej: 0.12 o -0.05) a escala de calor (0 a 1 centrada en 0.5)
                 const intensidad = Math.max(0, Math.min(1, 0.5 + info.idx * 2));
                 heatData.push([cafe.lat, cafe.lng, intensidad]);
 
@@ -210,12 +230,11 @@
                 }
 
                 const signo = info.idx > 0 ? '+' : '';
-                popupHTML += `<hr style="margin:5px 0;">Precio: <strong>$${info.precio}</strong><br>Diferencia: <strong>${signo}${(info.idx * 100).toFixed(1)}%</strong>`;
+                popupHTML += `<hr style="margin:5px 0;">Precio: <strong>$${info.precio.toLocaleString('es-AR')}</strong><br>Diferencia: <strong>${signo}${(info.idx * 100).toFixed(1)}%</strong>`;
 
                 marker.bindPopup(popupHTML);
                 markersLayer.addLayer(marker);
 
-                // Función de Análisis Zonal al hacer clic
                 marker.on('click', () => analizarCercania(cafe, cafesFiltrados, columnaIndice));
             });
 
@@ -237,11 +256,11 @@
                 
                 const distancia = calcularDistancia(localSeleccionado.lat, localSeleccionado.lng, c.lat, c.lng);
                 if (distancia <= 600) { 
-                    cercanos.push({ nombre: c.cafe, precio: parseFloat(info.precio) });
+                    cercanos.push({ nombre: c.cafe, precio: info.precio });
                 }
             });
 
-            const sumaPrecios = cercanos.reduce((acc, curr) => acc + (curr.precio || 0), 0);
+            const sumaPrecios = cercanos.reduce((acc, curr) => acc + curr.precio, 0);
             const promedioZona = cercanos.length > 0 ? Math.round(sumaPrecios / cercanos.length) : 0;
 
             const panel = document.getElementById('cluster-info');
@@ -249,10 +268,12 @@
                 <div class="stat-card">
                     <strong>Punto Central:</strong> ${localSeleccionado.cafe}<br>
                     <strong>Competidores (&le; 6 cuadras):</strong> ${cercanos.length}<br>
-                    <strong>Precio Promedio Zona:</strong> $${promedioZona.toLocaleString('es-AR')}
+                    <strong>Promedio de la Zona:</strong> $${promedioZona.toLocaleString('es-AR')}
                 </div>
-                <p class="list-text"><strong>Locales en el radio:</strong><br>` + 
-                cercanos.map(c => `- ${c.nombre} ($${c.precio})`).join('<br>') + `</p>
+                <p class="list-text" style="margin-bottom:5px;"><strong>Locales en el radio:</strong></p>
+                <div style="max-height: 150px; overflow-y: auto; font-size:12px; color:#555;">
+                    ` + cercanos.map(c => `• ${c.nombre} ($${c.precio.toLocaleString('es-AR')})`).join('<br>') + `
+                </div>
             `;
         }
 
