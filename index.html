@@ -51,20 +51,21 @@
         </div>
 
         <div class="control-group">
-            <h3>Filtro de Calor</h3>
+            <h3>Filtro de Bebida</h3>
             <select id="indice-selector">
-                <option value="Indice Expresso">Índice Espresso</option>
-                <option value="Indice Cortado">Índice Cortado</option>
-                <option value="Indice Flat" selected>Índice Flat White</option>
+                <option value="Indice Expresso">Espresso</option>
+                <option value="Indice Cortado">Cortado</option>
+                <option value="Indice Flat" selected>Flat White</option>
             </select>
 
             <div id="leyenda">
-                Precio vs. Promedio General
+                Precio vs. Promedio Mar del Plata
                 <div id="barra-leyenda"></div>
                 <div id="leyenda-labels">
-                    <span style="color:#2166ac;">Económico</span>
-                    <span style="color:#b2182b;">Premium</span>
+                    <span style="color:#2166ac;">Más barato</span>
+                    <span style="color:#b2182b;">Más caro</span>
                 </div>
+                <p style="margin-top:5px; font-size:11px; color:#888;">* Puntos grises: Local sin precio cargado para esa bebida.</p>
             </div>
         </div>
 
@@ -97,11 +98,17 @@
         const gid = '1166583340';
         const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
 
+        // Promedios estáticos de MDQ para usar como Base 1.0
+        const mediasHistoricas = {
+            'Indice Expresso': 4075,
+            'Indice Cortado': 4316,
+            'Indice Flat': 5650
+        };
+
         function normalizarHeader(h) {
             return h.trim().replace(/\s+/g, ' ');
         }
 
-        // Limpiador agresivo de moneda (Quita $, comas y espacios, deja solo decimales)
         function cleanPrice(val) {
             if (!val) return 0;
             let clean = val.toString().replace(/\$/g, '').replace(/,/g, '').trim();
@@ -139,7 +146,7 @@
                     const lng = parseFloat(rawLng);
                     if (isNaN(lat) || isNaN(lng)) return;
 
-                    // Si no hay columna CIUDAD, la deduce de la ZONA (Ej: "BAHIA BLANCA")
+                    // Deducir ciudad
                     let ciudadAsignada = 'Mar del Plata';
                     if(row.CIUDAD && row.CIUDAD.trim() !== '') {
                         ciudadAsignada = row.CIUDAD.trim();
@@ -151,17 +158,10 @@
                         ciudadAsignada = 'La Costa';
                     }
 
-                    const parseIdx = (v) => {
-                        if (v === undefined || v === null || v === '') return null;
-                        let s = v.toString().trim();
-                        const esPorcentaje = s.includes('%');
-                        s = s.replace('%', '').replace(',', '.');
-                        let n = parseFloat(s);
-                        if (isNaN(n)) return null;
-                        if (esPorcentaje) n = n / 100;
-                        if (n <= -0.99) return null; 
-                        return n;
-                    };
+                    // Limpiar precios crudos
+                    let pExp = cleanPrice(row.Expresso);
+                    let pCor = cleanPrice(row.Cortado);
+                    let pFla = cleanPrice(row.Flat);
 
                     cafesData.push({
                         cafe: row.CAFE,
@@ -171,14 +171,14 @@
                         lat: lat,
                         lng: lng,
                         precios: {
-                            'Indice Expresso': { precio: cleanPrice(row.Expresso), idx: parseIdx(row['Indice Expresso']) },
-                            'Indice Cortado': { precio: cleanPrice(row.Cortado), idx: parseIdx(row['Indice Cortado']) },
-                            'Indice Flat': { precio: cleanPrice(row.Flat), idx: parseIdx(row['Indice Flat']) }
+                            'Indice Expresso': { precio: pExp, idx: pExp > 0 ? (pExp / mediasHistoricas['Indice Expresso']) - 1 : null },
+                            'Indice Cortado':  { precio: pCor, idx: pCor > 0 ? (pCor / mediasHistoricas['Indice Cortado']) - 1 : null },
+                            'Indice Flat':     { precio: pFla, idx: pFla > 0 ? (pFla / mediasHistoricas['Indice Flat']) - 1 : null }
                         }
                     });
                 });
 
-                statusEl.textContent = `${cafesData.length} datos sincronizados`;
+                statusEl.textContent = `${cafesData.length} cafeterías sincronizadas`;
                 setTimeout(() => statusEl.style.opacity = '0', 2500);
 
                 actualizarVisualizacion();
@@ -199,38 +199,48 @@
 
             const cafesFiltrados = cafesData.filter(c => ciudadFiltro === 'ALL' || c.ciudad === ciudadFiltro);
             
-            // Si filtramos por ciudad, centramos el mapa en esa ciudad automáticamente
             if(cafesFiltrados.length > 0 && ciudadFiltro !== 'ALL') {
                 map.setView([cafesFiltrados[0].lat, cafesFiltrados[0].lng], 13);
             } else if (ciudadFiltro === 'ALL') {
-                map.setView([-38.005, -57.545], 8); // Alejar zoom para ver toda la provincia
+                map.setView([-38.005, -57.545], 8); 
             }
 
             const heatData = [];
 
             cafesFiltrados.forEach(cafe => {
                 const info = cafe.precios[columnaIndice];
-                if (!info || info.idx === null) return; 
+                
+                let colorMarcador = '#999999'; // Gris por defecto (sin precio)
+                let fillColorMarcador = '#cccccc';
+                let textoDiferencia = 'Sin precio cargado';
+                let textoPrecio = 'N/D';
 
-                const intensidad = Math.max(0, Math.min(1, 0.5 + info.idx * 2));
-                heatData.push([cafe.lat, cafe.lng, intensidad]);
+                // Si tiene el precio cargado, procesa los colores
+                if (info && info.idx !== null) {
+                    const intensidad = Math.max(0, Math.min(1, 0.5 + info.idx * 2));
+                    heatData.push([cafe.lat, cafe.lng, intensidad]);
+
+                    colorMarcador = info.idx > 0 ? '#b2182b' : '#2166ac';
+                    fillColorMarcador = info.idx > 0 ? '#ef8a62' : '#67a9cf';
+                    
+                    const signo = info.idx > 0 ? '+' : '';
+                    textoDiferencia = `${signo}${(info.idx * 100).toFixed(1)}%`;
+                    textoPrecio = `$${info.precio.toLocaleString('es-AR')}`;
+                }
 
                 const marker = L.circleMarker([cafe.lat, cafe.lng], {
                     radius: 7,
-                    color: info.idx > 0 ? '#b2182b' : '#2166ac',
-                    fillColor: info.idx > 0 ? '#ef8a62' : '#67a9cf',
+                    color: colorMarcador,
+                    fillColor: fillColorMarcador,
                     fillOpacity: 0.9,
                     weight: 2
                 });
 
                 let popupHTML = `<strong style="font-size:14px;">${cafe.cafe}</strong><br><span style="color:gray;">Zona: ${cafe.zona}</span><br>`;
-                
                 if (cafe.instagram && cafe.instagram.trim() !== '') {
                     popupHTML += `<a href="${cafe.instagram}" target="_blank" style="font-size:12px; color:#d62976; text-decoration:none;">📷 Ver Instagram</a><br>`;
                 }
-
-                const signo = info.idx > 0 ? '+' : '';
-                popupHTML += `<hr style="margin:5px 0;">Precio: <strong>$${info.precio.toLocaleString('es-AR')}</strong><br>Diferencia: <strong>${signo}${(info.idx * 100).toFixed(1)}%</strong>`;
+                popupHTML += `<hr style="margin:5px 0;">Precio: <strong>${textoPrecio}</strong><br>Vs. Promedio MDQ: <strong>${textoDiferencia}</strong>`;
 
                 marker.bindPopup(popupHTML);
                 markersLayer.addLayer(marker);
@@ -267,8 +277,8 @@
             panel.innerHTML = `
                 <div class="stat-card">
                     <strong>Punto Central:</strong> ${localSeleccionado.cafe}<br>
-                    <strong>Competidores (&le; 6 cuadras):</strong> ${cercanos.length}<br>
-                    <strong>Promedio de la Zona:</strong> $${promedioZona.toLocaleString('es-AR')}
+                    <strong>Competencia (&le; 6 cuadras):</strong> ${cercanos.length}<br>
+                    <strong>Precio Promedio Zona:</strong> $${promedioZona.toLocaleString('es-AR')}
                 </div>
                 <p class="list-text" style="margin-bottom:5px;"><strong>Locales en el radio:</strong></p>
                 <div style="max-height: 150px; overflow-y: auto; font-size:12px; color:#555;">
