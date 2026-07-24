@@ -3,95 +3,86 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Análisis de Mercado Café MDQ</title>
+    <title>Análisis Regional - Café MDQ</title>
 
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
 
     <style>
-        body { margin: 0; padding: 0; font-family: sans-serif; }
-        #map { height: 100vh; width: 100%; }
+        body { margin: 0; padding: 0; font-family: sans-serif; display: flex; height: 100vh; }
+        #sidebar { width: 320px; background: #fff; padding: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.2); z-index: 1000; overflow-y: auto; }
+        #map { flex-grow: 1; height: 100%; }
 
-        #control-panel {
-            position: absolute;
-            top: 15px;
-            right: 15px;
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-            z-index: 1000;
-            width: 220px;
-        }
+        .control-group { margin-bottom: 20px; }
+        select { padding: 8px; font-size: 14px; margin-top: 5px; width: 100%; cursor: pointer; border-radius: 4px; border: 1px solid #ccc; }
+        h2 { font-size: 18px; color: #333; margin-top: 0; border-bottom: 2px solid #333; padding-bottom: 10px;}
+        h3 { font-size: 14px; color: #555; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px;}
+        
+        .stat-card { background: #f9f9f9; padding: 12px; border-radius: 6px; margin-bottom: 10px; border-left: 4px solid #d62976; font-size: 13px; line-height: 1.5; }
+        .list-text { font-size: 12px; color: #666; line-height: 1.4; }
 
-        select { padding: 8px; font-size: 14px; margin-top: 10px; width: 100%; cursor: pointer; }
-        h3 { margin: 0 0 10px 0; font-size: 16px; color: #333; }
-
-        #leyenda {
-            margin-top: 12px;
-            font-size: 12px;
-            color: #555;
-        }
+        /* Estilos de la Leyenda de Calor */
+        #leyenda { margin-top: 15px; font-size: 12px; color: #555; }
         #barra-leyenda {
-            height: 10px;
-            width: 100%;
-            border-radius: 4px;
-            margin-top: 4px;
+            height: 10px; width: 100%; border-radius: 4px; margin-top: 4px;
             background: linear-gradient(to right, #2166ac, #67a9cf, #d1e5f0, #fddbc7, #ef8a62, #b2182b);
         }
-        #leyenda-labels {
-            display: flex;
-            justify-content: space-between;
-            margin-top: 2px;
-        }
+        #leyenda-labels { display: flex; justify-content: space-between; margin-top: 4px; font-weight: bold; }
 
         #status {
-            position: absolute;
-            top: 15px;
-            left: 15px;
-            background: white;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 13px;
-            z-index: 1000;
+            position: absolute; top: 15px; right: 15px; background: white;
+            padding: 8px 12px; border-radius: 6px; font-size: 13px; z-index: 2000;
             box-shadow: 0 2px 4px rgba(0,0,0,0.2);
         }
     </style>
 </head>
 <body>
 
-    <div id="status">Cargando datos…</div>
+    <div id="sidebar">
+        <h2>☕ Consultora Café</h2>
 
-    <div id="control-panel">
-        <h3>Filtro de Calor</h3>
-        <select id="indice-selector">
-            <option value="Indice Expresso">Índice Espresso</option>
-            <option value="Indice Cortado">Índice Cortado</option>
-            <option value="Indice Flat" selected>Índice Flat White</option>
-        </select>
+        <div class="control-group">
+            <h3>Filtrar Región</h3>
+            <select id="ciudad-selector">
+                <option value="ALL">Todas las regiones</option>
+                <option value="Mar del Plata">Mar del Plata</option>
+                <option value="Tandil">Tandil</option>
+                <option value="Bahia Blanca">Bahía Blanca</option>
+                <option value="La Costa">La Costa</option>
+            </select>
+        </div>
 
-        <div id="leyenda">
-            Precio vs. promedio de la ciudad
-            <div id="barra-leyenda"></div>
-            <div id="leyenda-labels">
-                <span>Más barato</span>
-                <span>Más caro</span>
+        <div class="control-group">
+            <h3>Filtro de Calor</h3>
+            <select id="indice-selector">
+                <option value="Indice Expresso">Índice Espresso</option>
+                <option value="Indice Cortado">Índice Cortado</option>
+                <option value="Indice Flat" selected>Índice Flat White</option>
+            </select>
+
+            <div id="leyenda">
+                Precio vs. Promedio General
+                <div id="barra-leyenda"></div>
+                <div id="leyenda-labels">
+                    <span style="color:#2166ac;">Económico</span>
+                    <span style="color:#b2182b;">Premium</span>
+                </div>
             </div>
+        </div>
+
+        <h3>📍 Análisis Zonal (~6 cuadras)</h3>
+        <div id="cluster-info">
+            <p class="list-text">Hacé clic en cualquier cafetería del mapa para analizar la densidad comercial y el promedio de precios a la redonda (600 metros).</p>
         </div>
     </div>
 
+    <div id="status">Cargando datos…</div>
     <div id="map"></div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js" onerror="document.getElementById('status').textContent='No cargó Leaflet (revisá tu conexión / bloqueador de anuncios)'; document.getElementById('status').style.color='red';"></script>
-    <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js" onerror="document.getElementById('status').textContent='No cargó el plugin de mapa de calor'; document.getElementById('status').style.color='red';"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js" onerror="document.getElementById('status').textContent='No cargó PapaParse'; document.getElementById('status').style.color='red';"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
 
     <script>
-        if (typeof L === 'undefined') {
-            document.getElementById('status').textContent = 'Error: Leaflet no cargó. Probá recargar la página.';
-            document.getElementById('status').style.color = 'red';
-            throw new Error('Leaflet (L) no está disponible - abortando script del mapa.');
-        }
-
         const map = L.map('map').setView([-38.005, -57.545], 13);
 
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
@@ -103,19 +94,27 @@
         let markersLayer = L.layerGroup().addTo(map);
         let cafesData = [];
 
-        // ---- CONFIGURACIÓN DE LA HOJA ----
         const sheetId = '1RLFtalcyVO_sKGdx8zY80bDFGJDZ4PTfPV_tAPEN-dU';
         const gid = '1166583340';
         const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
 
-        // Los nombres de columna en la hoja tienen espacios raros
-        // (" Indice Expresso", " Indice  Cortado", " Indice  Flat").
-        // Los normalizamos acá para no depender de eso.
         function normalizarHeader(h) {
             return h.trim().replace(/\s+/g, ' ');
         }
 
         const statusEl = document.getElementById('status');
+
+        // Haversine para distancias (metros)
+        function calcularDistancia(lat1, lon1, lat2, lon2) {
+            const R = 6371000; 
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c; 
+        }
 
         Papa.parse(csvUrl, {
             download: true,
@@ -124,8 +123,7 @@
             transformHeader: normalizarHeader,
             complete: function(results) {
                 const data = results.data;
-                console.log('Datos crudos de Google Sheets:', data);
-
+                
                 data.forEach(row => {
                     if (!row.CAFE) return;
 
@@ -138,22 +136,19 @@
                     const parseIdx = (v) => {
                         if (v === undefined || v === null || v === '') return null;
                         let s = v.toString().trim();
-                        // Google Sheets exporta las celdas con formato % como texto
-                        // "-11.14%" en vez del número -0.1114. Si viene con %, hay
-                        // que sacarlo y dividir por 100 para volver a la escala decimal.
                         const esPorcentaje = s.includes('%');
                         s = s.replace('%', '').replace(',', '.');
                         let n = parseFloat(s);
                         if (isNaN(n)) return null;
                         if (esPorcentaje) n = n / 100;
-                        // -1 (-100%) es el valor "sin precio" para esa bebida: se descarta
-                        if (n <= -0.99) return null;
+                        if (n <= -0.99) return null; // Filtra vacíos (-100%)
                         return n;
                     };
 
                     cafesData.push({
                         cafe: row.CAFE,
-                        zona: row.ZONA,
+                        zona: row.ZONA || 'General',
+                        ciudad: row.CIUDAD || 'Mar del Plata',
                         instagram: row.INSTAGRAM,
                         lat: lat,
                         lng: lng,
@@ -165,59 +160,63 @@
                     });
                 });
 
-                statusEl.textContent = `${cafesData.length} cafés cargados`;
-                setTimeout(() => statusEl.style.display = 'none', 2500);
+                statusEl.textContent = `${cafesData.length} datos sincronizados`;
+                setTimeout(() => statusEl.style.opacity = '0', 2500);
 
-                renderMapa('Indice Flat');
+                actualizarVisualizacion();
             },
             error: function(err) {
-                statusEl.textContent = 'Error al leer la hoja (¿está compartida como pública?)';
+                statusEl.textContent = 'Error de conexión con Google Sheets.';
                 statusEl.style.color = 'red';
-                console.error(err);
             }
         });
 
-        function renderMapa(columnaIndice) {
+        function actualizarVisualizacion() {
             if (heatLayer) map.removeLayer(heatLayer);
             markersLayer.clearLayers();
+            document.getElementById('cluster-info').innerHTML = '<p class="list-text">Hacé clic en cualquier cafetería del mapa para analizar la densidad comercial y el promedio de precios a la redonda (600 metros).</p>';
+
+            const ciudadFiltro = document.getElementById('ciudad-selector').value;
+            const columnaIndice = document.getElementById('indice-selector').value;
+
+            const cafesFiltrados = cafesData.filter(c => ciudadFiltro === 'ALL' || c.ciudad === ciudadFiltro);
+            
+            if(cafesFiltrados.length > 0 && ciudadFiltro !== 'ALL') {
+                map.setView([cafesFiltrados[0].lat, cafesFiltrados[0].lng], 13);
+            }
 
             const heatData = [];
 
-            cafesData.forEach(cafe => {
+            cafesFiltrados.forEach(cafe => {
                 const info = cafe.precios[columnaIndice];
-                if (!info || info.idx === null) return; // sin precio para esta bebida
+                if (!info || info.idx === null) return; 
 
-                // Leaflet.heat espera intensidad >= 0. Convertimos el índice
-                // (que va de negativo a positivo) a una escala 0-1 centrada en 0.5.
+                // Transforma el porcentaje (ej: 0.12 o -0.05) a escala de calor (0 a 1 centrada en 0.5)
                 const intensidad = Math.max(0, Math.min(1, 0.5 + info.idx * 2));
                 heatData.push([cafe.lat, cafe.lng, intensidad]);
 
                 const marker = L.circleMarker([cafe.lat, cafe.lng], {
-                    radius: 6,
+                    radius: 7,
                     color: info.idx > 0 ? '#b2182b' : '#2166ac',
                     fillColor: info.idx > 0 ? '#ef8a62' : '#67a9cf',
                     fillOpacity: 0.9,
-                    weight: 1
+                    weight: 2
                 });
 
-                let popupHTML = `
-                    <strong style="font-size:14px;">${cafe.cafe}</strong><br>
-                    <span style="color:gray;">Zona: ${cafe.zona || '-'}</span><br>
-                `;
-
+                let popupHTML = `<strong style="font-size:14px;">${cafe.cafe}</strong><br><span style="color:gray;">Zona: ${cafe.zona}</span><br>`;
+                
                 if (cafe.instagram && cafe.instagram.trim() !== '') {
                     popupHTML += `<a href="${cafe.instagram}" target="_blank" style="font-size:12px; color:#d62976; text-decoration:none;">📷 Ver Instagram</a><br>`;
                 }
 
                 const signo = info.idx > 0 ? '+' : '';
-                popupHTML += `
-                    <hr style="margin:5px 0;">
-                    Precio: <strong>$${info.precio}</strong><br>
-                    vs. promedio: <strong>${signo}${(info.idx * 100).toFixed(1)}%</strong>
-                `;
+                popupHTML += `<hr style="margin:5px 0;">Precio: <strong>$${info.precio}</strong><br>Diferencia: <strong>${signo}${(info.idx * 100).toFixed(1)}%</strong>`;
 
                 marker.bindPopup(popupHTML);
                 markersLayer.addLayer(marker);
+
+                // Función de Análisis Zonal al hacer clic
+                marker.on('click', () => analizarCercania(cafe, cafesFiltrados, columnaIndice));
             });
 
             heatLayer = L.heatLayer(heatData, {
@@ -229,9 +228,36 @@
             }).addTo(map);
         }
 
-        document.getElementById('indice-selector').addEventListener('change', function(e) {
-            renderMapa(e.target.value);
-        });
+        function analizarCercania(localSeleccionado, listaCafes, columnaIndice) {
+            let cercanos = [];
+            
+            listaCafes.forEach(c => {
+                const info = c.precios[columnaIndice];
+                if (!info || info.idx === null) return;
+                
+                const distancia = calcularDistancia(localSeleccionado.lat, localSeleccionado.lng, c.lat, c.lng);
+                if (distancia <= 600) { 
+                    cercanos.push({ nombre: c.cafe, precio: parseFloat(info.precio) });
+                }
+            });
+
+            const sumaPrecios = cercanos.reduce((acc, curr) => acc + (curr.precio || 0), 0);
+            const promedioZona = cercanos.length > 0 ? Math.round(sumaPrecios / cercanos.length) : 0;
+
+            const panel = document.getElementById('cluster-info');
+            panel.innerHTML = `
+                <div class="stat-card">
+                    <strong>Punto Central:</strong> ${localSeleccionado.cafe}<br>
+                    <strong>Competidores (&le; 6 cuadras):</strong> ${cercanos.length}<br>
+                    <strong>Precio Promedio Zona:</strong> $${promedioZona.toLocaleString('es-AR')}
+                </div>
+                <p class="list-text"><strong>Locales en el radio:</strong><br>` + 
+                cercanos.map(c => `- ${c.nombre} ($${c.precio})`).join('<br>') + `</p>
+            `;
+        }
+
+        document.getElementById('ciudad-selector').addEventListener('change', actualizarVisualizacion);
+        document.getElementById('indice-selector').addEventListener('change', actualizarVisualizacion);
     </script>
 </body>
 </html>
