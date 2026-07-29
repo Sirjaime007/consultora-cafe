@@ -66,7 +66,7 @@
                     <span style="color:#2166ac;">Más barato</span>
                     <span style="color:#b2182b;">Más caro</span>
                 </div>
-                <p style="margin-top:5px; font-size:11px; color:#888;">* Puntos grises: Local sin precio cargado para esa bebida.</p>
+                <p style="margin-top:5px; font-size:11px; color:#888;">* Puntos grises: Local sin precio cargado.</p>
             </div>
         </div>
 
@@ -99,8 +99,7 @@
         const gid = '1166583340';
         const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
 
-        // Objeto de promedios. Si falla la lectura de las columnas, usará estos de backup.
-        // Podés editar directamente acá los de La Plata si alguna vez se te rompe la fórmula en el Excel.
+        // Promedios Base (Se actualizan dinámicamente si encuentra las columnas, sino usa estos)
         const promedios = {
             'Mar del Plata': {
                 'Indice Expresso': 4075,
@@ -108,15 +107,13 @@
                 'Indice Flat': 5650
             },
             'La Plata': {
-                'Indice Expresso': 0, // Se autocompleta con O11
-                'Indice Cortado': 0,  // Se autocompleta con O12
-                'Indice Flat': 0      // Se autocompleta con O13
+                'Indice Expresso': 3800, // Valores de respaldo
+                'Indice Cortado': 4100,  
+                'Indice Flat': 5550      
             }
         };
 
-        function normalizarHeader(h) {
-            return h.trim().replace(/\s+/g, ' ');
-        }
+        function normalizarHeader(h) { return h.trim().replace(/\s+/g, ' '); }
 
         function cleanPrice(val) {
             if (!val) return 0;
@@ -125,7 +122,6 @@
             return isNaN(parsed) ? 0 : parsed;
         }
 
-        // Función auxiliar para buscar las columnas raras que mencionaste (O4, 011, etc.)
         function extractValue(row, keys) {
             for (let k of keys) {
                 if (row[k] !== undefined && row[k] !== '') {
@@ -158,22 +154,19 @@
                 const data = results.data;
                 
                 data.forEach(row => {
-                    // Intento de extraer los índices dinámicos de las celdas/columnas que indicaste
+                    // Buscar promedios MDQ
                     let mdpExp = extractValue(row, ['O4', '04', 'O 4']);
                     if (mdpExp > 0) promedios['Mar del Plata']['Indice Expresso'] = mdpExp;
-                    
                     let mdpCor = extractValue(row, ['O5', '05', 'O 5']);
                     if (mdpCor > 0) promedios['Mar del Plata']['Indice Cortado'] = mdpCor;
-                    
                     let mdpFla = extractValue(row, ['O6', '06', 'O 6']);
                     if (mdpFla > 0) promedios['Mar del Plata']['Indice Flat'] = mdpFla;
                     
+                    // Buscar promedios La Plata
                     let lpExp = extractValue(row, ['O11', '011', '11', 'O 11']);
                     if (lpExp > 0) promedios['La Plata']['Indice Expresso'] = lpExp;
-                    
                     let lpCor = extractValue(row, ['O12', '012', '12', 'O 12']);
                     if (lpCor > 0) promedios['La Plata']['Indice Cortado'] = lpCor;
-                    
                     let lpFla = extractValue(row, ['O13', '013', '13', 'O 13']);
                     if (lpFla > 0) promedios['La Plata']['Indice Flat'] = lpFla;
 
@@ -185,7 +178,6 @@
                     const lng = parseFloat(rawLng);
                     if (isNaN(lat) || isNaN(lng)) return;
 
-                    // Deducir ciudad agregando La Plata
                     let ciudadAsignada = 'Mar del Plata';
                     if(row.CIUDAD && row.CIUDAD.trim() !== '') {
                         ciudadAsignada = row.CIUDAD.trim();
@@ -214,7 +206,6 @@
 
                 statusEl.textContent = `${cafesData.length} cafeterías sincronizadas`;
                 setTimeout(() => statusEl.style.opacity = '0', 2500);
-
                 actualizarVisualizacion();
             },
             error: function(err) {
@@ -231,16 +222,14 @@
             const ciudadFiltro = document.getElementById('ciudad-selector').value;
             const columnaIndice = document.getElementById('indice-selector').value;
 
-            // Actualizar el texto de la leyenda
-            const textLeyenda = ciudadFiltro === 'ALL' ? 'Precio vs. Promedio de su ciudad' : `Precio vs. Promedio ${ciudadFiltro}`;
-            document.getElementById('leyenda-titulo').innerText = textLeyenda;
+            document.getElementById('leyenda-titulo').innerText = ciudadFiltro === 'ALL' ? 'Precio vs. Promedio local' : `Precio vs. Promedio ${ciudadFiltro}`;
 
             const cafesFiltrados = cafesData.filter(c => ciudadFiltro === 'ALL' || c.ciudad === ciudadFiltro);
             
             if(cafesFiltrados.length > 0 && ciudadFiltro !== 'ALL') {
                 map.setView([cafesFiltrados[0].lat, cafesFiltrados[0].lng], 13);
             } else if (ciudadFiltro === 'ALL') {
-                map.setView([-36.5, -57.5], 7); // Vista un poco más alejada para abarcar MDQ y LP
+                map.setView([-36.5, -57.5], 7); 
             }
 
             const heatData = [];
@@ -250,33 +239,21 @@
                 let colorMarcador = '#999999'; 
                 let fillColorMarcador = '#cccccc';
                 
-                let idxLocal = null;
-                let nombreCiudadLocal = cafe.ciudad;
+                // Color del marcador basado en SU propia ciudad (o MDQ por defecto si es de otra)
+                let promParaColor = promedios[cafe.ciudad] ? promedios[cafe.ciudad][columnaIndice] : promedios['Mar del Plata'][columnaIndice];
                 
-                // Tratar de usar el promedio de la ciudad del café. Si no existe, usamos MDQ de backup.
-                let promLocal = (promedios[cafe.ciudad] && promedios[cafe.ciudad][columnaIndice] > 0) 
-                                ? promedios[cafe.ciudad][columnaIndice] 
-                                : promedios['Mar del Plata'][columnaIndice];
-                
-                if (promLocal > 0 && precio > 0) {
-                    idxLocal = (precio / promLocal) - 1;
-                    
-                    const intensidad = Math.max(0, Math.min(1, 0.5 + idxLocal * 2));
+                if (precio > 0 && promParaColor > 0) {
+                    let idxColor = (precio / promParaColor) - 1;
+                    const intensidad = Math.max(0, Math.min(1, 0.5 + idxColor * 2));
                     heatData.push([cafe.lat, cafe.lng, intensidad]);
-
-                    colorMarcador = idxLocal > 0 ? '#b2182b' : '#2166ac';
-                    fillColorMarcador = idxLocal > 0 ? '#ef8a62' : '#67a9cf';
+                    colorMarcador = idxColor > 0 ? '#b2182b' : '#2166ac';
+                    fillColorMarcador = idxColor > 0 ? '#ef8a62' : '#67a9cf';
                 }
 
                 const marker = L.circleMarker([cafe.lat, cafe.lng], {
-                    radius: 7,
-                    color: colorMarcador,
-                    fillColor: fillColorMarcador,
-                    fillOpacity: 0.9,
-                    weight: 2
+                    radius: 7, color: colorMarcador, fillColor: fillColorMarcador, fillOpacity: 0.9, weight: 2
                 });
 
-                // Armado del Popup
                 let popupHTML = `<strong style="font-size:14px;">${cafe.cafe}</strong><br><span style="color:gray;">Zona: ${cafe.zona}</span><br>`;
                 if (cafe.instagram && cafe.instagram.trim() !== '') {
                     popupHTML += `<a href="${cafe.instagram}" target="_blank" style="font-size:12px; color:#d62976; text-decoration:none;">📷 Ver Instagram</a><br>`;
@@ -286,27 +263,35 @@
                 if (precio > 0) {
                     popupHTML += `Precio: <strong>$${precio.toLocaleString('es-AR')}</strong><br>`;
                     
-                    if (idxLocal !== null) {
-                        const signoLocal = idxLocal > 0 ? '+' : '';
-                        const colorNum = idxLocal > 0 ? '#b2182b' : '#2166ac';
-                        // Chequeo estético por si usamos el backup de MDQ
-                        let ciudadVista = (promedios[cafe.ciudad] && promedios[cafe.ciudad][columnaIndice] > 0) ? cafe.ciudad : 'Mar del Plata';
-                        popupHTML += `Vs. Prom. ${ciudadVista}: <strong style="color:${colorNum};">${signoLocal}${(idxLocal * 100).toFixed(1)}%</strong><br>`;
-                    }
-
-                    // Comparativa cruzada exclusiva para La Plata y MDQ
+                    // LOGICA ESTRICTA PARA MOSTRAR LAS DOS CIUDADES
                     if (cafe.ciudad === 'Mar del Plata' || cafe.ciudad === 'La Plata') {
-                        const otraCiudad = cafe.ciudad === 'Mar del Plata' ? 'La Plata' : 'Mar del Plata';
-                        const promOtra = promedios[otraCiudad] ? promedios[otraCiudad][columnaIndice] : 0;
                         
-                        if (promOtra > 0) {
-                            const idxOtra = (precio / promOtra) - 1;
-                            const signoOtra = idxOtra > 0 ? '+' : '';
-                            const colorOtra = idxOtra > 0 ? '#b2182b' : '#2166ac';
-                            popupHTML += `Vs. Prom. ${otraCiudad}: <strong style="color:${colorOtra};">${signoOtra}${(idxOtra * 100).toFixed(1)}%</strong><br>`;
+                        let promMDQ = promedios['Mar del Plata'][columnaIndice];
+                        let promLP = promedios['La Plata'][columnaIndice];
+                        
+                        // Si el local es de MDQ, mostramos MDQ primero
+                        if (cafe.ciudad === 'Mar del Plata') {
+                            let idx1 = (precio / promMDQ) - 1;
+                            popupHTML += `Vs. Prom. Mar del Plata: <strong style="color:${idx1 > 0 ? '#b2182b' : '#2166ac'};">${idx1 > 0 ? '+' : ''}${(idx1 * 100).toFixed(1)}%</strong><br>`;
+                            
+                            let idx2 = (precio / promLP) - 1;
+                            popupHTML += `Vs. Prom. La Plata: <strong style="color:${idx2 > 0 ? '#b2182b' : '#2166ac'};">${idx2 > 0 ? '+' : ''}${(idx2 * 100).toFixed(1)}%</strong><br>`;
+                        } 
+                        // Si el local es de La Plata, mostramos LP primero
+                        else {
+                            let idx1 = (precio / promLP) - 1;
+                            popupHTML += `Vs. Prom. La Plata: <strong style="color:${idx1 > 0 ? '#b2182b' : '#2166ac'};">${idx1 > 0 ? '+' : ''}${(idx1 * 100).toFixed(1)}%</strong><br>`;
+                            
+                            let idx2 = (precio / promMDQ) - 1;
+                            popupHTML += `Vs. Prom. Mar del Plata: <strong style="color:${idx2 > 0 ? '#b2182b' : '#2166ac'};">${idx2 > 0 ? '+' : ''}${(idx2 * 100).toFixed(1)}%</strong><br>`;
                         }
-                    }
 
+                    } else {
+                        // Para otras ciudades (ej. Tandil), solo lo comparamos vs MDQ
+                        let promMDQ = promedios['Mar del Plata'][columnaIndice];
+                        let idx = (precio / promMDQ) - 1;
+                        popupHTML += `Vs. Prom. Mar del Plata: <strong style="color:${idx > 0 ? '#b2182b' : '#2166ac'};">${idx > 0 ? '+' : ''}${(idx * 100).toFixed(1)}%</strong><br>`;
+                    }
                 } else {
                     popupHTML += `Precio: <strong style="color:#888;">Sin precio cargado</strong><br>`;
                 }
@@ -318,32 +303,24 @@
             });
 
             heatLayer = L.heatLayer(heatData, {
-                radius: 35,
-                blur: 20,
-                maxZoom: 15,
-                max: 1.0,
+                radius: 35, blur: 20, maxZoom: 15, max: 1.0,
                 gradient: { 0.0: '#2166ac', 0.25: '#67a9cf', 0.5: '#d1e5f0', 0.75: '#ef8a62', 1.0: '#b2182b' }
             }).addTo(map);
         }
 
         function analizarCercania(localSeleccionado, listaCafes, columnaIndice) {
             let cercanos = [];
-            
             listaCafes.forEach(c => {
                 const precio = c.precios[columnaIndice];
                 if (!precio || precio === 0) return;
-                
                 const distancia = calcularDistancia(localSeleccionado.lat, localSeleccionado.lng, c.lat, c.lng);
-                if (distancia <= 600) { 
-                    cercanos.push({ nombre: c.cafe, precio: precio });
-                }
+                if (distancia <= 600) cercanos.push({ nombre: c.cafe, precio: precio });
             });
 
             const sumaPrecios = cercanos.reduce((acc, curr) => acc + curr.precio, 0);
             const promedioZona = cercanos.length > 0 ? Math.round(sumaPrecios / cercanos.length) : 0;
 
-            const panel = document.getElementById('cluster-info');
-            panel.innerHTML = `
+            document.getElementById('cluster-info').innerHTML = `
                 <div class="stat-card">
                     <strong>Punto Central:</strong> ${localSeleccionado.cafe}<br>
                     <strong>Competencia (&le; 6 cuadras):</strong> ${cercanos.length}<br>
@@ -361,3 +338,4 @@
     </script>
 </body>
 </html>
+
